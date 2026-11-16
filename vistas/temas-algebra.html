@@ -1,0 +1,139 @@
+<div class="contenedor-temas">
+    <div class="contenedor-cabecera-temas">
+        <button class="btn-regresar" onclick="regresarACapitulos()">← Volver a Módulos</button>
+    </div>
+    <h2>Temas de Álgebra Compleja</h2>
+    <div class="grid-temas">
+        {{tarjetas_temas}}
+    </div>
+    
+    <div id="pantalla-detalle-tema" class="pantalla-detalle-tema oculto"></div>
+</div>
+
+<script>
+    function redirigirTema(event, idTema) {
+        cargarExplicacionTeorica(idTema);
+    }
+
+    function irASimulacion(event, urlSim) {
+        event.stopPropagation();
+        window.location.href = urlSim;
+    }
+
+    // ============================================================
+    // FUNCIÓN EXAMEN (CORREGIDA PARA CARGAR JS EXTERNOS DEL SERVER)
+    // ============================================================
+    async function abrirTestProximamente(event) {
+        event.stopPropagation();
+        
+        try {
+            const respuesta = await fetch('http://localhost:5000/api/examen-algebra');
+            if (!respuesta.ok) throw new Error('No se pudo cargar el examen.');
+            
+            const datos = await respuesta.json();
+            const areaDetalle = document.getElementById('pantalla-detalle-tema');
+            
+            if (datos.cssUrl) {
+                const cssAnterior = document.getElementById('css-examen-algebra');
+                if (cssAnterior) cssAnterior.remove();
+
+                const nuevoCss = document.createElement('link');
+                nuevoCss.id = 'css-examen-algebra';
+                nuevoCss.rel = 'stylesheet';
+                nuevoCss.href = datos.cssUrl;
+                document.head.appendChild(nuevoCss);
+            }
+
+            if (window.MathJax && window.MathJax.typesetClear) {
+                window.MathJax.typesetClear([areaDetalle]);
+            }
+
+            areaDetalle.innerHTML = datos.html;
+            
+            document.querySelector('.grid-temas').style.display = 'none';
+            document.querySelector('.contenedor-temas > h2').style.display = 'none';
+            document.querySelector('.contenedor-cabecera-temas').style.display = 'none';
+            areaDetalle.classList.remove('oculto');
+            
+            // PROCESADOR DE SCRIPTS MEJORADO (Soporta código interno y archivos src externos)
+            const scriptsInternos = areaDetalle.querySelectorAll('script');
+            scriptsInternos.forEach(scriptViejo => {
+                const scriptNuevo = document.createElement('script');
+                
+                // Si viene de un archivo externo (ej: src="http://localhost:5000/..."), clonamos todos sus atributos
+                if (scriptViejo.src) {
+                    Array.from(scriptViejo.attributes).forEach(attr => {
+                        scriptNuevo.setAttribute(attr.name, attr.value);
+                    });
+                } else {
+                    // Si es lógica inline, copiamos el texto directo
+                    scriptNuevo.text = scriptViejo.text;
+                }
+                
+                document.body.appendChild(scriptNuevo).parentNode.removeChild(scriptNuevo);
+            });
+
+            if (window.MathJax && window.MathJax.typesetPromise) {
+                window.MathJax.typesetPromise([areaDetalle])
+                    .catch((err) => console.log("Error renderizando MathJax en Examen: ", err));
+            }
+
+        } catch(error) {
+            console.error("Error al cargar el examen:", error);
+            alert("No se pudo cargar el examen de Álgebra Compleja.");
+        }
+    }
+
+    async function cargarExplicacionTeorica(idTema) {
+        try {
+            const res = await fetch(`http://localhost:5000/api/contenido-tema/${idTema}`);
+            const datos = await res.json();
+            
+            const areaDetalle = document.getElementById('pantalla-detalle-tema');
+            
+            if (window.MathJax && window.MathJax.typesetClear) {
+                window.MathJax.typesetClear([areaDetalle]);
+            }
+
+            areaDetalle.innerHTML = datos.html;
+            
+            document.querySelector('.grid-temas').style.display = 'none';
+            document.querySelector('.contenedor-temas > h2').style.display = 'none';
+            document.querySelector('.contenedor-cabecera-temas').style.display = 'none';
+            areaDetalle.classList.remove('oculto');
+            
+            const scriptsInternos = areaDetalle.querySelectorAll('script');
+            scriptsInternos.forEach(scriptViejo => {
+                const scriptNuevo = document.createElement('script');
+                if (scriptViejo.src) {
+                    Array.from(scriptViejo.attributes).forEach(attr => {
+                        scriptNuevo.setAttribute(attr.name, attr.value);
+                    });
+                } else {
+                    scriptNuevo.text = scriptViejo.text;
+                }
+                document.body.appendChild(scriptNuevo).parentNode.removeChild(scriptNuevo);
+            });
+
+            if (window.MathJax && window.MathJax.typesetPromise) {
+                window.MathJax.typesetPromise([areaDetalle])
+                    .catch((err) => console.log("Error renderizando MathJax: ", err));
+            }
+
+        } catch(e) {
+            console.error("Error al cargar la teoría:", e);
+        }
+    }
+
+    function regresarAlasTarjetas() {
+        document.getElementById('pantalla-detalle-tema').classList.add('oculto');
+        document.querySelector('.grid-temas').style.display = 'flex';
+        document.querySelector('.contenedor-temas > h2').style.display = 'block';
+        document.querySelector('.contenedor-cabecera-temas').style.display = 'block';
+    }
+
+    function regresarACapitulos() {
+        document.getElementById('btn-variable-compleja').click();
+    }
+</script>
+

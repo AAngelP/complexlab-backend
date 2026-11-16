@@ -1,0 +1,167 @@
+<div class="contenedor-temas">
+    <div class="contenedor-cabecera-temas">
+        <button class="btn-regresar" onclick="regresarACapitulos()">← Volver a Módulos</button>
+    </div>
+    <h2>Temas de Integración Compleja</h2>
+    <div class="grid-temas">
+        <!-- Tarjeta 1: Bases de Integración Compleja -->
+        <div class="tarjeta-tema" style="background: rgba(74, 189, 172, 0.2);" onclick="redirigirTema(event, 'bases-integracion')">
+            <div class="contenido-tema">
+                <h3>Bases de Integración Compleja</h3>
+                <p class="desc">Integrales de línea en el plano complejo, parametrización de contornos, propiedades fundamentales y acotación ML.</p>
+            </div>
+            <div class="acciones-tema">
+                <button class="btn-tema btn-sim" onclick="irASimulacion(event, '/api/cargar-juego/PON-AQUI-TU-RUTA-1')">Simulación</button>
+                <button class="btn-tema btn-test" onclick="abrirTestProximamente(event)">Test</button>
+            </div>
+        </div>
+
+        <!-- Tarjeta 2: Integral de Cauchy -->
+        <div class="tarjeta-tema" style="background: rgba(52, 152, 219, 0.2);" onclick="redirigirTema(event, 'integral-cauchy')">
+            <div class="contenido-tema">
+                <h3>Integral de Cauchy</h3>
+                <p class="desc">Teorema de Cauchy-Goursat, independencia de la trayectoria y Fórmula Integral de Cauchy para derivadas de orden superior.</p>
+            </div>
+            <div class="acciones-tema">
+                <button class="btn-tema btn-sim" onclick="irASimulacion(event, '/api/cargar-juego/PON-AQUI-TU-RUTA-2')">Simulación</button>
+                <button class="btn-tema btn-test" onclick="abrirTestProximamente(event)">Test</button>
+            </div>
+        </div>
+
+        <!-- Tarjeta 3: Teorema del Residuo -->
+        <div class="tarjeta-tema" style="background: rgba(241, 196, 15, 0.2);" onclick="redirigirTema(event, 'teorema-residuo')">
+            <div class="contenido-tema">
+                <h3>Teorema del Residuo</h3>
+                <p class="desc">Clasificación de singularidades aisladas, cálculo de residuos y evaluación de integrales cerradas mediante el Teorema de los Residuos.</p>
+            </div>
+            <div class="acciones-tema">
+                <button class="btn-tema btn-sim" onclick="irASimulacion(event, '/api/cargar-juego/PON-AQUI-TU-RUTA-3')">Simulación</button>
+                <button class="btn-tema btn-test" onclick="abrirTestProximamente(event)">Test</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="pantalla-detalle-tema" class="pantalla-detalle-tema oculto"></div>
+</div>
+
+<script>
+    function redirigirTema(event, idTema) {
+        cargarExplicacionTeorica(idTema);
+    }
+
+    function irASimulacion(event, urlSim) {
+        event.stopPropagation();
+        window.location.href = urlSim;
+    }
+
+    // ============================================================
+    // FUNCIÓN EXAMEN (INTEGRACIÓN COMPLEJA)
+    // ============================================================
+    async function abrirTestProximamente(event) {
+        event.stopPropagation();
+        
+        try {
+            const respuesta = await fetch('http://localhost:5000/api/examen-integracion');
+            if (!respuesta.ok) throw new Error('No se pudo cargar el examen.');
+            
+            const datos = await respuesta.json();
+            const areaDetalle = document.getElementById('pantalla-detalle-tema');
+            
+            if (datos.cssUrl) {
+                const cssAnterior = document.getElementById('css-examen-integracion');
+                if (cssAnterior) cssAnterior.remove();
+
+                const nuevoCss = document.createElement('link');
+                nuevoCss.id = 'css-examen-integracion';
+                nuevoCss.rel = 'stylesheet';
+                nuevoCss.href = datos.cssUrl;
+                document.head.appendChild(nuevoCss);
+            }
+
+            if (window.MathJax && window.MathJax.typesetClear) {
+                window.MathJax.typesetClear([areaDetalle]);
+            }
+
+            areaDetalle.innerHTML = datos.html;
+            
+            document.querySelector('.grid-temas').style.display = 'none';
+            document.querySelector('.contenedor-temas > h2').style.display = 'none';
+            document.querySelector('.contenedor-cabecera-temas').style.display = 'none';
+            areaDetalle.classList.remove('oculto');
+            
+            const scriptsInternos = areaDetalle.querySelectorAll('script');
+            scriptsInternos.forEach(scriptViejo => {
+                const scriptNuevo = document.createElement('script');
+                if (scriptViejo.src) {
+                    Array.from(scriptViejo.attributes).forEach(attr => {
+                        scriptNuevo.setAttribute(attr.name, attr.value);
+                    });
+                } else {
+                    scriptNuevo.text = scriptViejo.text;
+                }
+                document.body.appendChild(scriptNuevo).parentNode.removeChild(scriptNuevo);
+            });
+
+            if (window.MathJax && window.MathJax.typesetPromise) {
+                window.MathJax.typesetPromise([areaDetalle])
+                    .catch((err) => console.log("Error renderizando MathJax en Examen: ", err));
+            }
+
+        } catch(error) {
+            console.error("Error al cargar el examen:", error);
+            alert("No se pudo cargar el examen de Integración Compleja.");
+        }
+    }
+
+    async function cargarExplicacionTeorica(idTema) {
+        try {
+            const res = await fetch(`http://localhost:5000/api/contenido-tema/${idTema}`);
+            const datos = await res.json();
+            
+            const areaDetalle = document.getElementById('pantalla-detalle-tema');
+            
+            if (window.MathJax && window.MathJax.typesetClear) {
+                window.MathJax.typesetClear([areaDetalle]);
+            }
+
+            areaDetalle.innerHTML = datos.html;
+            
+            document.querySelector('.grid-temas').style.display = 'none';
+            document.querySelector('.contenedor-temas > h2').style.display = 'none';
+            document.querySelector('.contenedor-cabecera-temas').style.display = 'none';
+            areaDetalle.classList.remove('oculto');
+            
+            const scriptsInternos = areaDetalle.querySelectorAll('script');
+            scriptsInternos.forEach(scriptViejo => {
+                const scriptNuevo = document.createElement('script');
+                if (scriptViejo.src) {
+                    Array.from(scriptViejo.attributes).forEach(attr => {
+                        scriptNuevo.setAttribute(attr.name, attr.value);
+                    });
+                } else {
+                    scriptNuevo.text = scriptViejo.text;
+                }
+                document.body.appendChild(scriptNuevo).parentNode.removeChild(scriptNuevo);
+            });
+
+            if (window.MathJax && window.MathJax.typesetPromise) {
+                window.MathJax.typesetPromise([areaDetalle])
+                    .catch((err) => console.log("Error renderizando MathJax: ", err));
+            }
+
+        } catch(e) {
+            console.error("Error al cargar la teoría:", e);
+        }
+    }
+
+    function regresarAlasTarjetas() {
+        document.getElementById('pantalla-detalle-tema').classList.add('oculto');
+        document.querySelector('.grid-temas').style.display = 'flex';
+        document.querySelector('.contenedor-temas > h2').style.display = 'block';
+        document.querySelector('.contenedor-cabecera-temas').style.display = 'block';
+    }
+
+    function regresarACapitulos() {
+        document.getElementById('btn-variable-compleja').click();
+    }
+</script>
