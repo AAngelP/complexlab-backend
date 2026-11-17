@@ -619,7 +619,7 @@ app.get('/api/mi-progreso', (req, res) => {
 /*==================================================
 RUTA PRINCIPAL (CATCH-ALL PARA REACT O INDEX)
 ==================================================*/
-app.get('*', (req, res) => {
+app.use((req, res) => {
     const rutaBuild = path.join(__dirname, 'build', 'index.html');
     if (fs.existsSync(rutaBuild)) {
         res.sendFile(rutaBuild);
@@ -627,6 +627,7 @@ app.get('*', (req, res) => {
         res.send('Servidor ComplexLab activo en la nube.');
     }
 });
+
 
 /*==================================================
 ARRANQUE DEL SERVIDOR
