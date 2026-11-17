@@ -815,7 +815,7 @@ app.use('/api', (req, res) => {
    RUTA PRINCIPAL Y FRONTEND REACT
 ================================================== */
 
-app.get('*', (req, res, next) => {
+app.get('/{*splat}', (req, res, next) => {
     const indexPath = path.join(BUILD_DIR, 'index.html');
 
     if (fs.existsSync(indexPath)) {
@@ -837,3 +837,4 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`Servidor COMPLEXLAB activo en el puerto ${PORT}`);
     console.log(`Entorno: ${process.env.NODE_ENV || 'development'}`);
 });
+
