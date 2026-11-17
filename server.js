@@ -14,7 +14,7 @@ ARCHIVOS ESTÁTICOS GENERALES
 ==================================================*/
 app.use('/imagenes', express.static(path.join(__dirname, 'imagenes')));
 app.use('/fondos', express.static(path.join(__dirname, 'fondos')));
-app.use('/cssvistas', express.static(path.join(__dirname, 'cssvistas')));
+app.use('/cssvistas', express.static(path.join(__dirname, 'CSSvistas')));
 app.use('/vistas', express.static(path.join(__dirname, 'vistas')));
 app.use('/js', express.static(path.join(__dirname, 'js')));
 
