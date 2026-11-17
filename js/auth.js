@@ -1,5 +1,4 @@
-
-const AUTH_API = 'http://localhost:5000/api';
+const AUTH_API = 'https://onrender.com';
 
 let vistaAuthActual = null;
 let navegacionAuthConfigurada = false;
