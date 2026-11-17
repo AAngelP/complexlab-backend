@@ -514,7 +514,8 @@ function mostrarInicioPrincipal(limpiarHistorial = false) {
     } else {
         const frame = document.getElementById('frame-fondo');
         if (frame) {
-            frame.src = 'http://localhost:5000/fondos/complejo.html';
+            frame.src = 'https://onrender.com';
+
         }
     }
 
