@@ -1764,7 +1764,8 @@
 
             const respuesta =
                 await fetch(
-                    "http://localhost:5000/api/variable-compleja/algebra"
+                    "https://onrender.com"
+
                 );
 
 
