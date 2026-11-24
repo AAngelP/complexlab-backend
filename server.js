@@ -28,7 +28,6 @@ const pool = new Pool({
     }
 });
 
-// Inicialización automática de tablas y usuario demo
 async function inicializarBaseDeDatos() {
     const client = await pool.connect();
     try {
@@ -94,7 +93,6 @@ async function inicializarBaseDeDatos() {
                 ON desarrollo_simulacion(id_usuario);
         `);
 
-        // Insertar usuario de prueba si no existe
         const existeDemo = await client.query(
             'SELECT id_usuario FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1)',
             ['usuario_p1']
@@ -132,7 +130,6 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 const ROOT = __dirname;
 const BUILD_DIR = path.join(ROOT, 'build');
 
-// Detección flexible de carpeta CSS (CSSvistas o cssvistas) para evitar fallos en Linux/Render
 const rutaCssMayus = path.join(ROOT, 'CSSvistas');
 const rutaCssMinus = path.join(ROOT, 'cssvistas');
 const carpetaCssReal = fs.existsSync(rutaCssMayus) ? rutaCssMayus : rutaCssMinus;
@@ -147,23 +144,14 @@ const DIR = {
 };
 
 /* ==================================================
-   DIAGNÓSTICO DE ESTRUCTURA
+   DIAGNÓSTICO Y ARCHIVOS ESTÁTICOS
 ================================================== */
 
-function comprobarDirectorio(nombre, ruta) {
+Object.entries(DIR).forEach(([nombre, ruta]) => {
     if (!fs.existsSync(ruta)) {
         console.warn(`[ADVERTENCIA] No existe el directorio "${nombre}": ${ruta}`);
     }
-}
-
-Object.entries(DIR).forEach(([nombre, ruta]) => {
-    comprobarDirectorio(nombre, ruta);
 });
-comprobarDirectorio('build', BUILD_DIR);
-
-/* ==================================================
-   ARCHIVOS ESTÁTICOS
-================================================== */
 
 app.use('/imagenes', express.static(DIR.imagenes, { fallthrough: false, maxAge: '1d' }));
 app.use('/fondos', express.static(DIR.fondos, { fallthrough: false, maxAge: '1d' }));
@@ -188,7 +176,6 @@ juegos.forEach(([url, carpeta]) => {
 if (fs.existsSync(BUILD_DIR)) {
     app.use(express.static(BUILD_DIR, { index: false, fallthrough: true, maxAge: '1h' }));
 }
-
 /* ==================================================
    FUNCIONES AUXILIARES DE VISTAS
 ================================================== */
@@ -383,7 +370,6 @@ app.get('/api/variable-compleja/algebra', async (req, res) => {
         enviarError(res, 500, 'No se pudo cargar temas-algebra.html.');
     }
 });
-
 app.get('/api/variable-compleja/derivacion', async (req, res) => {
     const temas = [
         {
@@ -431,57 +417,6 @@ app.get('/api/variable-compleja/derivacion', async (req, res) => {
             html: html.replace(/{{tarjetas_temas}}/g, tarjetas)
         });
     } catch (error) {
-        enviarError(res, 500, 'No se pudo cargar temas-derivacion.html.');
-    }
-});
-
-app.get('/api/variable-compleja/integracion', async (req, res) => {
-    const temas = [
-        {
-            id: 'bases-integracion',
-            titulo: 'Bases de Integración Compleja',
-            color: 'rgba(74, 189, 172, 0.2)',
-            descripcion: 'Integrales de línea en el plano complejo, parametrización de contornos, propiedades fundamentales y acotación ML.',
-            urlSimulacion: '#'
-        },
-        {
-            id: 'integral-cauchy',
-            titulo: 'Integral de Cauchy',
-            color: 'rgba(52, 152, 219, 0.2)',
-            descripcion: 'Teorema de Cauchy-Goursat, independencia de la trayectoria y Fórmula Integral de Cauchy para derivadas de orden superior.',
-            urlSimulacion: '#'
-        },
-        {
-            id: 'teorema-residuo',
-            titulo: 'Teorema del Residuo',
-            color: 'rgba(241, 196, 15, 0.2)',
-            descripcion: 'Clasificación de singularidades aisladas, cálculo de residuos y evaluación de integrales cerradas mediante el Teorema de los Residuos.',
-            urlSimulacion: '#'
-        }
-    ];
-
-    try {
-        const html = await leerHtml('temas-integracion.html');
-        const tarjetas = temas.map(tema => `
-            <div class="tarjeta-tema" style="background:${tema.color};" onclick="redirigirTema(event, '${tema.id}')">
-                <div class="contenido-tema">
-                    <h3>${tema.titulo}</h3>
-                    <p class="desc">${tema.descripcion}</p>
-                </div>
-                <div class="acciones-tema">
-                    ${tema.urlSimulacion !== '#'
-                        ? `<button class="btn-tema btn-sim" onclick="irASimulacion(event, '${tema.urlSimulacion}')">Simulación</button>`
-                        : '<span class="no-sim">Sin simulación</span>'}
-                    <button class="btn-tema btn-test" onclick="abrirTestProximamente(event)">Test</button>
-                </div>
-            </div>
-        `).join('');
-
-        res.json({
-            cssUrl: '/cssvistas/temas-algebra.css',
-            html: html.replace(/{{tarjetas_temas}}/g, tarjetas)
-        });
-       } catch (error) {
         enviarError(res, 500, 'No se pudo cargar temas-derivacion.html.');
     }
 });
@@ -589,3 +524,499 @@ app.get('/api/examen-algebra', (req, res) => responderVista(res, 'examen-algebra
 app.get('/api/examen-derivacion', (req, res) => responderVista(res, 'examen-derivacion.html', '/cssvistas/examen-algebra.css'));
 app.get('/api/examen-integracion', (req, res) => responderVista(res, 'examen-integracion.html', '/cssvistas/examen-algebra.css'));
 
+/* ==================================================
+   AUTENTICACIÓN CON POSTGRESQL (NEON)
+================================================== */
+
+function crearHashPassword(password) {
+    const salt = crypto.randomBytes(16);
+    const hash = crypto.scryptSync(password, salt, 32);
+
+    return {
+        salt: salt.toString('hex'),
+        hash: hash.toString('hex')
+    };
+}
+
+function verificarPassword(password, saltHex, hashHex) {
+    try {
+        const salt = Buffer.from(saltHex.trim(), 'hex');
+        const hashCalculado = crypto.scryptSync(password, salt, 32);
+        const hashGuardado = Buffer.from(hashHex.trim(), 'hex');
+
+        return hashCalculado.length === hashGuardado.length &&
+            crypto.timingSafeEqual(hashCalculado, hashGuardado);
+    } catch (error) {
+        return false;
+    }
+}
+
+function validarUsuario(usuario) {
+    return typeof usuario === 'string' && /^[a-zA-Z0-9_.-]{3,30}$/.test(usuario);
+}
+
+function validarCorreo(correo) {
+    return typeof correo === 'string' && /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@gmail\.com$/i.test(correo);
+}
+
+function validarPassword(password) {
+    return typeof password === 'string' &&
+        password.length >= 10 &&
+        /[A-Z]/.test(password) &&
+        /[a-z]/.test(password) &&
+        /[0-9]/.test(password) &&
+        /[^A-Za-z0-9]/.test(password);
+}
+
+function generarCodigo6Digitos() {
+    return String(crypto.randomInt(100000, 1000000));
+}
+
+async function enviarCorreoVerificacion(correo, usuario, codigo) {
+    if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+        const transporter = nodemailer.createTransport({
+            host: process.env.SMTP_HOST,
+            port: Number(process.env.SMTP_PORT || 587),
+            secure: process.env.SMTP_SECURE === 'true',
+            auth: {
+                user: process.env.SMTP_USER,
+                pass: process.env.SMTP_PASS
+            }
+        });
+
+        await transporter.sendMail({
+            from: process.env.SMTP_FROM || `"COMPLEXLAB" <${process.env.SMTP_USER}>`,
+            to: correo,
+            subject: 'Código de verificación - COMPLEXLAB',
+            text: `Hola ${usuario}, tu código de verificación es: ${codigo}. Válido por 2 minutos.`,
+            html: `<p>Hola <strong>${usuario}</strong>,</p><p>Tu código de verificación de COMPLEXLAB es:</p><h2>${codigo}</h2><p>Este código es válido por 2 minutos.</p>`
+        });
+        return true;
+    } else {
+        console.log(`[VERIFICACIÓN DEMO] Usuario: ${usuario} | Correo: ${correo} | Código: ${codigo}`);
+        return false;
+    }
+}
+app.get('/api/vistas/inicio-sesion', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    responderVista(res, 'inicio-sesion.html', '/cssvistas/auth.css');
+});
+
+app.get('/api/vistas/registro', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    responderVista(res, 'registro.html', '/cssvistas/auth.css');
+});
+
+app.post('/api/registro/enviar-codigo', async (req, res) => {
+    const { usuario, correo, password } = req.body || {};
+
+    if (!usuario || !correo || !password) {
+        return enviarError(res, 400, 'Todos los campos son obligatorios.');
+    }
+
+    const nombreUsuario = usuario.trim();
+    const email = correo.trim();
+
+    if (!validarUsuario(nombreUsuario)) {
+        return enviarError(res, 400, 'El usuario debe tener entre 3 y 30 caracteres (letras, números, punto, guion y guion bajo).');
+    }
+
+    if (!validarCorreo(email)) {
+        return enviarError(res, 400, 'Ingresa un correo válido que termine en @gmail.com.');
+    }
+
+    if (!validarPassword(password)) {
+        return enviarError(res, 400, 'La contraseña debe tener al menos 10 caracteres, una mayúscula, una minúscula, un número y un carácter especial.');
+    }
+
+    const client = await pool.connect();
+    try {
+        const existeUsuario = await client.query(
+            'SELECT 1 FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1) OR LOWER(correo) = LOWER($2)',
+            [nombreUsuario, email]
+        );
+
+        if (existeUsuario.rows.length > 0) {
+            return enviarError(res, 409, 'El nombre de usuario o el correo ya están registrados.');
+        }
+
+        await client.query('BEGIN');
+
+        await client.query(
+            'DELETE FROM registro_pendiente WHERE LOWER(nombre_usuario) = LOWER($1) OR LOWER(correo) = LOWER($2)',
+            [nombreUsuario, email]
+        );
+
+        const { salt, hash } = crearHashPassword(password);
+
+        const resPendiente = await client.query(
+            `INSERT INTO registro_pendiente (nombre_usuario, correo, password_hash, password_salt)
+             VALUES ($1, $2, $3, $4) RETURNING id_pendiente`,
+            [nombreUsuario, email, hash, salt]
+        );
+
+        const idPendiente = resPendiente.rows.id_pendiente;
+        const codigo = generarCodigo6Digitos();
+        const expiraEn = new Date(Date.now() + 2 * 60 * 1000);
+
+        await client.query(
+            `INSERT INTO codigo_de_verificacion (codigo_temporal, fecha_expiracion, usado, id_pendiente)
+             VALUES ($1, $2, FALSE, $3)`,
+            [codigo, expiraEn.toISOString(), idPendiente]
+        );
+
+        await client.query('COMMIT');
+
+        const enviadoPorCorreo = await enviarCorreoVerificacion(email, nombreUsuario, codigo);
+
+        return res.status(200).json({
+            mensaje: enviadoPorCorreo
+                ? 'Código enviado a tu correo @gmail.com.'
+                : `Código generado (Modo sin SMTP: ${codigo}). Revisa tu bandeja.`,
+            expiraEn: expiraEn.toISOString()
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error en /api/registro/enviar-codigo:', error);
+        return enviarError(res, 500, 'Error al procesar el registro.');
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/api/registro/verificar', async (req, res) => {
+    const { usuario, codigo } = req.body || {};
+
+    if (!usuario || !codigo) {
+        return enviarError(res, 400, 'Faltan datos para la verificación.');
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const resPendiente = await client.query(
+            `SELECT rp.*, cv.id_codigo, cv.codigo_temporal, cv.fecha_expiracion, cv.usado
+             FROM registro_pendiente rp
+             JOIN codigo_de_verificacion cv ON cv.id_pendiente = rp.id_pendiente
+             WHERE LOWER(rp.nombre_usuario) = LOWER($1)
+             ORDER BY cv.id_codigo DESC
+             LIMIT 1`,
+            [usuario.trim()]
+        );
+
+        if (resPendiente.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return enviarError(res, 404, 'No se encontró una solicitud de registro activa.');
+        }
+
+        const registro = resPendiente.rows;
+
+        if (registro.usado) {
+            await client.query('ROLLBACK');
+            return enviarError(res, 400, 'Este código ya fue utilizado.');
+        }
+
+        if (new Date(registro.fecha_expiracion) < new Date()) {
+            await client.query('ROLLBACK');
+            return enviarError(res, 400, 'El código ha caducado. Solicita uno nuevo.');
+        }
+
+        if (registro.codigo_temporal.trim() !== String(codigo).trim()) {
+            await client.query('ROLLBACK');
+            return enviarError(res, 400, 'El código de verificación es incorrecto.');
+        }
+
+        await client.query(
+            'UPDATE codigo_de_verificacion SET usado = TRUE WHERE id_codigo = $1',
+            [registro.id_codigo]
+        );
+
+        const nuevoUsuario = await client.query(
+            `INSERT INTO usuario (nombre_usuario, correo, password_hash, password_salt, correo_verificado)
+             VALUES ($1, $2, $3, $4, TRUE)
+             RETURNING nombre_usuario`,
+            [registro.nombre_usuario, registro.correo, registro.password_hash, registro.password_salt]
+        );
+
+        await client.query(
+            'DELETE FROM registro_pendiente WHERE id_pendiente = $1',
+            [registro.id_pendiente]
+        );
+
+        await client.query('COMMIT');
+
+        return res.status(201).json({
+            mensaje: 'Cuenta verificada y creada con éxito.',
+            usuario: nuevoUsuario.rows.nombre_usuario
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error en /api/registro/verificar:', error);
+        return enviarError(res, 500, 'Error al verificar el código.');
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/api/registro/reenviar-codigo', async (req, res) => {
+    const { usuario } = req.body || {};
+    if (!usuario) return enviarError(res, 400, 'Usuario requerido.');
+
+    const client = await pool.connect();
+    try {
+        const resPendiente = await client.query(
+            'SELECT id_pendiente, nombre_usuario, correo FROM registro_pendiente WHERE LOWER(nombre_usuario) = LOWER($1)',
+            [usuario.trim()]
+        );
+
+        if (resPendiente.rows.length === 0) {
+            return enviarError(res, 404, 'La solicitud expiró. Por favor vuelve a llenar el formulario.');
+        }
+
+        const pendiente = resPendiente.rows;
+        const nuevoCodigo = generarCodigo6Digitos();
+        const expiraEn = new Date(Date.now() + 2 * 60 * 1000);
+
+        await client.query(
+            `INSERT INTO codigo_de_verificacion (codigo_temporal, fecha_expiracion, usado, id_pendiente)
+             VALUES ($1, $2, FALSE, $3)`,
+            [nuevoCodigo, expiraEn.toISOString(), pendiente.id_pendiente]
+        );
+
+        const enviadoPorCorreo = await enviarCorreoVerificacion(pendiente.correo, pendiente.nombre_usuario, nuevoCodigo);
+
+        return res.status(200).json({
+            mensaje: enviadoPorCorreo
+                ? 'Nuevo código enviado a tu correo.'
+                : `Nuevo código generado (Modo sin SMTP: ${nuevoCodigo}).`,
+            expiraEn: expiraEn.toISOString()
+        });
+    } catch (error) {
+        console.error('Error en /api/registro/reenviar-codigo:', error);
+        return enviarError(res, 500, 'No se pudo reenviar el código.');
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/api/iniciar-sesion', async (req, res) => {
+    const { usuario, password } = req.body || {};
+
+    if (!usuario || !password) {
+        return enviarError(res, 400, 'Ingresa el usuario y la contraseña.');
+    }
+
+    try {
+        const resultado = await pool.query(
+            'SELECT id_usuario, nombre_usuario, password_hash, password_salt FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1)',
+            [usuario.trim()]
+        );
+
+        if (resultado.rows.length === 0) {
+            return enviarError(res, 401, 'Usuario o contraseña incorrectos.');
+        }
+
+        const cuenta = resultado.rows;
+
+        if (!verificarPassword(password, cuenta.password_salt, cuenta.password_hash)) {
+            return enviarError(res, 401, 'Usuario o contraseña incorrectos.');
+        }
+
+        return res.status(200).json({
+            mensaje: 'Inicio de sesión correcto.',
+            usuario: cuenta.nombre_usuario
+        });
+    } catch (error) {
+        console.error('Error en /api/iniciar-sesion:', error);
+        return enviarError(res, 500, 'Error interno al iniciar sesión.');
+    }
+});
+
+app.get('/api/scripts/auth', async (req, res) => {
+    try {
+        const rutaScript = path.join(DIR.js, 'auth.js');
+        const codigo = await fs.promises.readFile(rutaScript, 'utf8');
+        res.type('application/javascript');
+        res.set('Cache-Control', 'no-store');
+        res.status(200).send(codigo);
+    } catch (error) {
+        enviarError(res, 500, 'No se pudo cargar el script de autenticación.');
+    }
+});
+
+/* ==================================================
+   MI PROGRESO Y EVALUACIONES (POSTGRESQL)
+================================================== */
+
+app.get('/api/mi-progreso', (req, res) => {
+    responderVista(res, 'mi-progreso.html', '/cssvistas/mi-progreso.css');
+});
+
+app.get('/api/progreso/:usuario', async (req, res) => {
+    try {
+        const { rows } = await pool.query(
+            `SELECT p.id_progreso, p.numero_de_intento, p.fecha_de_guardado, p.unidad_tematica, p.calificacion
+             FROM progreso p
+             JOIN usuario u ON u.id_usuario = p.id_usuario
+             WHERE LOWER(u.nombre_usuario) = LOWER($1)
+             ORDER BY p.fecha_de_guardado DESC`,
+            [req.params.usuario.trim()]
+        );
+        res.json(rows);
+    } catch (error) {
+        console.error('Error al obtener progreso:', error);
+        enviarError(res, 500, 'Error al consultar el progreso.');
+    }
+});
+
+app.post('/api/progreso', async (req, res) => {
+    const { usuario, numero_intento, unidad_tematica, calificacion } = req.body || {};
+
+    if (!usuario || !unidad_tematica || calificacion === undefined) {
+        return enviarError(res, 400, 'Datos incompletos para guardar progreso.');
+    }
+
+    try {
+        const userRes = await pool.query(
+            'SELECT id_usuario FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1)',
+            [usuario.trim()]
+        );
+
+        if (userRes.rows.length === 0) {
+            return enviarError(res, 404, 'Usuario no encontrado.');
+        }
+
+        const idUsuario = userRes.rows[0].id_usuario;
+
+        const insertRes = await pool.query(
+            `INSERT INTO progreso (id_usuario, numero_de_intento, unidad_tematica, calificacion)
+             VALUES ($1, $2, $3, $4)
+             RETURNING *`,
+            [idUsuario, numero_intento || 1, unidad_tematica, Number(calificacion)]
+        );
+
+        res.status(201).json({
+            mensaje: 'Progreso guardado correctamente.',
+            registro: insertRes.rows[0]
+        });
+    } catch (error) {
+        console.error('Error al guardar progreso:', error);
+        enviarError(res, 500, 'Error al guardar la calificación en la base de datos.');
+    }
+});
+
+app.delete('/api/progreso/:usuario', async (req, res) => {
+    try {
+        await pool.query(
+            `DELETE FROM progreso
+             WHERE id_usuario = (SELECT id_usuario FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1))`,
+            [req.params.usuario.trim()]
+        );
+        res.json({ mensaje: 'Historial eliminado correctamente.' });
+    } catch (error) {
+        console.error('Error al borrar progreso:', error);
+        enviarError(res, 500, 'No se pudo eliminar el historial.');
+    }
+});
+
+/* ==================================================
+   DESARROLLOS DE SIMULACIÓN (PDFs)
+================================================== */
+
+app.get('/api/desarrollos/:usuario', async (req, res) => {
+    try {
+        const { rows } = await pool.query(
+            `SELECT d.id_registro, d.fecha_de_guardado, d.desarrollo_id, d.simulacion_id, d.ruta_pdf
+             FROM desarrollo_simulacion d
+             JOIN usuario u ON u.id_usuario = d.id_usuario
+             WHERE LOWER(u.nombre_usuario) = LOWER($1)
+             ORDER BY d.fecha_de_guardado DESC`,
+            [req.params.usuario.trim()]
+        );
+        res.json(rows);
+    } catch (error) {
+        console.error('Error al obtener desarrollos:', error);
+        enviarError(res, 500, 'Error al consultar los PDFs guardados.');
+    }
+});
+
+app.post('/api/desarrollos', async (req, res) => {
+    const { usuario, desarrollo_id, simulacion_id, ruta_pdf } = req.body || {};
+
+    if (!usuario || !desarrollo_id || !simulacion_id) {
+        return enviarError(res, 400, 'Faltan datos del desarrollo.');
+    }
+
+    try {
+        const userRes = await pool.query(
+            'SELECT id_usuario FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1)',
+            [usuario.trim()]
+        );
+
+        if (userRes.rows.length === 0) {
+            return enviarError(res, 404, 'Usuario no encontrado.');
+        }
+
+        const insertRes = await pool.query(
+            `INSERT INTO desarrollo_simulacion (id_usuario, desarrollo_id, simulacion_id, ruta_pdf)
+             VALUES ($1, $2, $3, $4)
+             RETURNING *`,
+            [userRes.rows[0].id_usuario, desarrollo_id, simulacion_id, ruta_pdf || null]
+        );
+
+        res.status(201).json({
+            mensaje: 'Desarrollo guardado correctamente.',
+            registro: insertRes.rows[0]
+        });
+    } catch (error) {
+        console.error('Error al guardar desarrollo:', error);
+        enviarError(res, 500, 'Error al guardar el desarrollo.');
+    }
+});
+
+/* ==================================================
+   MANEJO DE ERRORES Y FRONTEND REACT
+================================================== */
+
+app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+
+    if (err.status === 404 || err.statusCode === 404) {
+        return res.status(404).json({
+            error: 'No se encontró el archivo solicitado.',
+            ruta: req.originalUrl
+        });
+    }
+
+    console.error('Error de Express:', err);
+    return res.status(500).json({ error: 'Ocurrió un error interno al procesar la solicitud.' });
+});
+
+app.use('/api', (req, res) => {
+    res.status(404).json({
+        error: 'Ruta API no encontrada.',
+        ruta: req.originalUrl
+    });
+});
+
+app.get('/{*splat}', (req, res, next) => {
+    const indexPath = path.join(BUILD_DIR, 'index.html');
+    if (fs.existsSync(indexPath)) {
+        return res.sendFile(indexPath, error => {
+            if (error) next(error);
+        });
+    }
+    return res.status(200).send('Servidor API REST de COMPLEXLAB activo en Render.');
+});
+
+/* ==================================================
+   ARRANQUE DEL SERVIDOR
+================================================== */
+
+inicializarBaseDeDatos().then(() => {
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`Servidor COMPLEXLAB activo en el puerto ${PORT}`);
+        console.log(`Entorno: ${process.env.NODE_ENV || 'development'}`);
+    });
+});
