@@ -1,103 +1,143 @@
 
 <section class="auth-page">
-    <div class="auth-card">
-        <h1>Crear cuenta</h1>
-        <p class="auth-subtitle">Regístrate en COMPLEXLAB con tu correo @gmail.com</p>
+    <div class="auth-card auth-card-register">
+        <a href="#" class="auth-brand" onclick="volverAlInicio(event)">
+            ComplexLab
+        </a>
 
-        <form id="form-registro" class="auth-form" novalidate>
-            <div class="auth-group">
+        <div class="auth-icon">＋</div>
+
+        <h1>Crea tu cuenta</h1>
+        <p class="auth-subtitle">
+            Regístrate para comenzar a aprender.
+        </p>
+
+        <form id="form-registro" novalidate>
+            <div class="auth-field">
                 <label for="registro-usuario">Nombre de usuario</label>
                 <input
                     type="text"
                     id="registro-usuario"
                     name="usuario"
-                    placeholder="Ej. estudiante_escom"
+                    placeholder="Elige un nombre de usuario"
                     autocomplete="username"
+                    maxlength="30"
                     required
                 >
             </div>
 
-            <div class="auth-group">
-                <label for="registro-correo">Correo electrónico (@gmail.com)</label>
+            <div class="auth-field">
+                <label for="registro-correo">Correo electrónico</label>
                 <input
                     type="email"
                     id="registro-correo"
                     name="correo"
-                    placeholder="usuario@gmail.com"
+                    placeholder="ejemplo@gmail.com"
                     autocomplete="email"
                     required
                 >
+                <small>Por ahora, solo se aceptan correos @gmail.com.</small>
             </div>
 
-            <div class="auth-group">
+            <div class="auth-field">
                 <label for="registro-password">Contraseña</label>
                 <input
                     type="password"
                     id="registro-password"
                     name="password"
-                    placeholder="Mín. 10 caracteres, mayúscula, minúscula, número y símbolo"
+                    placeholder="Crea una contraseña segura"
                     autocomplete="new-password"
                     required
                 >
             </div>
 
-            <div class="auth-group">
-                <label for="registro-confirmar">Confirmar contraseña</label>
+            <div class="password-rules">
+                <p>Tu contraseña debe contener:</p>
+                <ul>
+                    <li>10 caracteres como mínimo</li>
+                    <li>Al menos una letra mayúscula</li>
+                    <li>Al menos una letra minúscula</li>
+                    <li>Al menos un número</li>
+                    <li>Al menos un carácter especial: . _ @ ! &amp; % etc.</li>
+                </ul>
+            </div>
+
+            <div class="auth-field">
+                <label for="registro-confirmar">
+                    Confirmar contraseña
+                </label>
                 <input
                     type="password"
                     id="registro-confirmar"
                     name="confirmar"
-                    placeholder="Repite tu contraseña"
+                    placeholder="Escribe nuevamente tu contraseña"
                     autocomplete="new-password"
                     required
                 >
             </div>
 
+            <p id="registro-mensaje" class="auth-message"
+               role="alert" aria-live="polite"></p>
+
             <button type="submit" class="auth-button">
-                Enviar código de verificación
+                Registrar cuenta
             </button>
         </form>
 
-        <!-- Bloque oculto que se muestra al enviar el código -->
-        <div id="bloque-verificacion" class="verificacion-box" style="display: none; margin-top: 20px;">
-            <hr style="margin-bottom: 15px; opacity: 0.2;">
-            <p id="codigo-temporizador" style="font-weight: 600; margin-bottom: 10px;">
-                Código válido por 2:00
+
+        <!-- Paso 2: código enviado por correo (oculto hasta enviar el formulario) -->
+        <div id="paso-codigo" style="display:none">
+            <p class="auth-subtitle">
+                Enviamos un código de 6 dígitos a
+                <strong id="codigo-destino"></strong>.
+                Revisa también la carpeta de spam.
             </p>
 
-            <div class="auth-group">
-                <label for="registro-codigo">Código de 6 dígitos</label>
-                <input
-                    type="text"
-                    id="registro-codigo"
-                    maxlength="6"
-                    inputmode="numeric"
-                    placeholder="000000"
-                    style="text-align: center; letter-spacing: 6px; font-size: 1.2rem;"
-                >
-            </div>
+            <form id="form-codigo" novalidate>
+                <div class="auth-field">
+                    <label for="codigo-input">Código de verificación</label>
+                    <input
+                        type="text"
+                        id="codigo-input"
+                        class="codigo-input"
+                        inputmode="numeric"
+                        autocomplete="one-time-code"
+                        maxlength="6"
+                        placeholder="000000"
+                    >
+                    <small id="codigo-tiempo"></small>
+                </div>
 
-            <button type="button" id="btn-verificar-codigo" class="auth-button" style="margin-top: 10px;">
-                Verificar código
-            </button>
+                <p id="codigo-mensaje" class="auth-message"
+                   role="alert" aria-live="polite"></p>
 
-            <button
-                type="button"
-                id="btn-reenviar-codigo"
-                class="auth-button secondary"
-                style="display: none; margin-top: 10px;"
-            >
-                Reenviar código
-            </button>
+                <button type="submit" class="auth-button">
+                    Verificar y crear cuenta
+                </button>
+            </form>
+
+            <p class="auth-switch">
+                ¿No te llegó?
+                <button type="button" id="codigo-reenviar" disabled>
+                    Reenviar código
+                </button>
+                ·
+                <button type="button" id="codigo-cambiar">
+                    Cambiar correo
+                </button>
+            </p>
         </div>
 
-        <p id="registro-mensaje" class="auth-message" role="alert"></p>
-
-        <div class="auth-footer">
-            <span>¿Ya tienes cuenta?</span>
-            <button type="button" id="ir-login" class="link-button">
-                Inicia sesión aquí
+        <p class="auth-switch">
+            ¿Ya tienes cuenta?
+            <button type="button" id="ir-login">
+                Inicia sesión
             </button>
-        </div>
+        </p>
+
+        <button type="button" class="auth-back"
+                onclick="volverAlInicio()">
+            ← Volver al inicio
+        </button>
     </div>
 </section>
