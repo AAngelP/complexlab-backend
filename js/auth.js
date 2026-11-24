@@ -1,4 +1,4 @@
-const AUTH_API = '/api'; // Funciona dinámicamente en Render y en local
+const AUTH_API = '/api'; // Mismo dominio (Render)
 
 let vistaAuthActual = null;
 let navegacionAuthConfigurada = false;
@@ -15,25 +15,48 @@ function obtenerUsuarioActual() {
     }
 }
 
-function establecerUsuarioActual(usuario) {
+function obtenerTokenActual() {
+    try {
+        return sessionStorage.getItem('complexlab_token');
+    } catch {
+        return null;
+    }
+}
+
+function establecerUsuarioActual(usuario, token) {
     sessionStorage.setItem('complexlab_usuario', usuario);
+    if (token) sessionStorage.setItem('complexlab_token', token);
 }
 
 function limpiarUsuarioActual() {
     sessionStorage.removeItem('complexlab_usuario');
+    sessionStorage.removeItem('complexlab_token');
 }
 
 async function obtenerRespuesta(ruta, opciones = {}) {
+    const token = obtenerTokenActual();
+
     const respuesta = await fetch(`${AUTH_API}${ruta}`, {
         ...opciones,
         headers: {
             'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
             ...(opciones.headers || {})
         },
         cache: 'no-store'
     });
 
-    const datos = await respuesta.json();
+    let datos = {};
+    try {
+        datos = await respuesta.json();
+    } catch {
+        datos = {};
+    }
+
+    if (respuesta.status === 401 && token) {
+        // Sesión expirada: se limpia para pedir inicio de sesión de nuevo.
+        limpiarUsuarioActual();
+    }
 
     if (!respuesta.ok) {
         throw new Error(datos.error || 'No se pudo completar la solicitud.');
@@ -182,8 +205,9 @@ function configurarFormularioLogin() {
                 body: JSON.stringify({ usuario, password })
             });
 
-            establecerUsuarioActual(resultado.usuario);
+            establecerUsuarioActual(resultado.usuario, resultado.token);
 
+            // Evita regresar a una vista de autenticación anterior.
             history.replaceState(
                 { pagina: 'principal', autenticado: true },
                 '',
@@ -205,6 +229,8 @@ function configurarFormularioLogin() {
 ========================================= */
 
 function validarCorreoGmail(correo) {
+    // Acepta direcciones como nombre.apellido@gmail.com.
+    // No acepta espacios ni dominios diferentes de gmail.com.
     return /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@gmail\.com$/i
         .test(correo);
 }
@@ -238,8 +264,6 @@ function validarPassword(password) {
 function configurarFormularioRegistro() {
     const formulario = document.getElementById('form-registro');
     const botonLogin = document.getElementById('ir-login');
-    const botonVerificar = document.getElementById('btn-verificar-codigo');
-    const botonReenviar = document.getElementById('btn-reenviar-codigo');
 
     if (botonLogin) {
         botonLogin.addEventListener('click', abrirInicioSesion);
@@ -247,90 +271,60 @@ function configurarFormularioRegistro() {
 
     if (!formulario) return;
 
-    let codigoEnviado = false;
-    let usuarioPendiente = '';
-    let tiempoRestante = 0;
-    let temporizador = null;
-
-    const campoCodigo = () => document.getElementById('registro-codigo');
-    const bloqueCodigo = () => document.getElementById('bloque-verificacion');
-    const estadoCodigo = () => document.getElementById('codigo-temporizador');
-
-    function iniciarTemporizador(expiraEn) {
-        clearInterval(temporizador);
-
-        const actualizar = () => {
-            tiempoRestante = Math.max(0, Math.floor(
-                (new Date(expiraEn).getTime() - Date.now()) / 1000
-            ));
-
-            const minutos = Math.floor(tiempoRestante / 60);
-            const segundos = String(tiempoRestante % 60).padStart(2, '0');
-
-            if (estadoCodigo()) {
-                estadoCodigo().textContent =
-                    tiempoRestante > 0
-                        ? `Código válido por ${minutos}:${segundos}`
-                        : 'El código ha caducado.';
-            }
-
-            if (tiempoRestante <= 0) {
-                clearInterval(temporizador);
-                if (botonVerificar) botonVerificar.disabled = true;
-                if (botonReenviar) botonReenviar.style.display = 'block';
-            }
-        };
-
-        actualizar();
-        temporizador = setInterval(actualizar, 1000);
-    }
-
-    function datosRegistro() {
-        return {
-            usuario: document.getElementById('registro-usuario')?.value.trim(),
-            correo: document.getElementById('registro-correo')?.value.trim(),
-            password: document.getElementById('registro-password')?.value,
-            confirmar: document.getElementById('registro-confirmar')?.value
-        };
-    }
-
-    function validarDatosRegistro(datos) {
-        if (!datos.usuario || !datos.correo || !datos.password || !datos.confirmar) {
-            return 'Todos los campos son obligatorios.';
-        }
-
-        if (!/^[a-zA-Z0-9_.-]{3,30}$/.test(datos.usuario)) {
-            return 'El usuario debe tener entre 3 y 30 caracteres y solo puede contener letras, números, punto, guion o guion bajo.';
-        }
-
-        if (!validarCorreoGmail(datos.correo)) {
-            return 'Ingresa un correo válido con el dominio @gmail.com.';
-        }
-
-        const erroresPassword = validarPassword(datos.password);
-        if (erroresPassword.length > 0) {
-            return erroresPassword.join(' ');
-        }
-
-        if (datos.password !== datos.confirmar) {
-            return 'Las contraseñas no coinciden.';
-        }
-
-        return null;
-    }
-
     formulario.addEventListener('submit', async event => {
         event.preventDefault();
 
-        if (codigoEnviado) {
+        const usuario = document.getElementById('registro-usuario')
+            .value.trim();
+
+        const correo = document.getElementById('registro-correo')
+            .value.trim();
+
+        const password = document.getElementById('registro-password')
+            .value;
+
+        const confirmar = document.getElementById('registro-confirmar')
+            .value;
+
+        if (!usuario || !correo || !password || !confirmar) {
+            mostrarMensaje(
+                'registro-mensaje',
+                'Todos los campos son obligatorios.'
+            );
             return;
         }
 
-        const datos = datosRegistro();
-        const errorValidacion = validarDatosRegistro(datos);
+        if (!/^[a-zA-Z0-9_.-]{3,30}$/.test(usuario)) {
+            mostrarMensaje(
+                'registro-mensaje',
+                'El usuario debe tener entre 3 y 30 caracteres y solo puede contener letras, números, punto, guion o guion bajo.'
+            );
+            return;
+        }
 
-        if (errorValidacion) {
-            mostrarMensaje('registro-mensaje', errorValidacion);
+        if (!validarCorreoGmail(correo)) {
+            mostrarMensaje(
+                'registro-mensaje',
+                'Ingresa un correo válido con el dominio @gmail.com.'
+            );
+            return;
+        }
+
+        const erroresPassword = validarPassword(password);
+
+        if (erroresPassword.length > 0) {
+            mostrarMensaje(
+                'registro-mensaje',
+                erroresPassword.join(' ')
+            );
+            return;
+        }
+
+        if (password !== confirmar) {
+            mostrarMensaje(
+                'registro-mensaje',
+                'Las contraseñas no coinciden.'
+            );
             return;
         }
 
@@ -338,129 +332,145 @@ function configurarFormularioRegistro() {
         boton.disabled = true;
         boton.textContent = 'Enviando código...';
 
-               try {
+        try {
             const resultado = await obtenerRespuesta('/registro/enviar-codigo', {
                 method: 'POST',
-                body: JSON.stringify({
-                    usuario: datos.usuario,
-                    correo: datos.correo,
-                    password: datos.password
-                })
+                body: JSON.stringify({ usuario, correo, password })
             });
 
-            codigoEnviado = true;
-            usuarioPendiente = datos.usuario;
-
-            if (bloqueCodigo()) {
-                bloqueCodigo().style.display = 'block';
-            }
-
-            if (botonVerificar) {
-                botonVerificar.disabled = false;
-            }
-
-            if (botonReenviar) {
-                botonReenviar.style.display = 'none';
-            }
-
-            mostrarMensaje(
-                'registro-mensaje',
-                resultado.mensaje,
-                true
-            );
-
-            iniciarTemporizador(resultado.expiraEn);
-            campoCodigo()?.focus();
-
-            document.getElementById('registro-password').readOnly = true;
-            document.getElementById('registro-confirmar').readOnly = true;
-            document.getElementById('registro-usuario').readOnly = true;
-            document.getElementById('registro-correo').readOnly = true;
+            mostrarPasoCodigo(usuario, correo, resultado.expiraEn);
         } catch (error) {
             mostrarMensaje('registro-mensaje', error.message);
         } finally {
-            boton.disabled = codigoEnviado;
-            boton.textContent = codigoEnviado ? 'Código enviado' : 'Enviar código de verificación';
+            boton.disabled = false;
+            boton.textContent = 'Registrar cuenta';
         }
     });
 
-    if (botonVerificar) {
-        botonVerificar.addEventListener('click', async () => {
-            const codigo = campoCodigo()?.value.trim();
+    configurarPasoCodigo();
+}
 
-            if (!/^\d{6}$/.test(codigo || '')) {
-                mostrarMensaje('registro-mensaje', 'Ingresa un código válido de 6 dígitos.');
-                return;
-            }
+/* =========================================
+   VERIFICACIÓN DE CORREO (CÓDIGO DE 6 DÍGITOS)
+========================================= */
 
-            if (tiempoRestante <= 0) {
-                mostrarMensaje('registro-mensaje', 'El código ha caducado. Solicita uno nuevo.');
-                botonReenviar.style.display = 'block';
-                return;
-            }
+let temporizadorCodigo = null;
+let usuarioPendiente = null;
 
-            botonVerificar.disabled = true;
-            botonVerificar.textContent = 'Verificando...';
+function mostrarPasoCodigo(usuario, correo, expiraEn) {
+    usuarioPendiente = usuario;
 
-            try {
-                const resultado = await obtenerRespuesta('/registro/verificar', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        usuario: usuarioPendiente,
-                        codigo
-                    })
-                });
+    document.getElementById('form-registro').style.display = 'none';
+    const paso = document.getElementById('paso-codigo');
+    paso.style.display = 'block';
 
-                clearInterval(temporizador);
-                establecerUsuarioActual(resultado.usuario);
+    document.getElementById('codigo-destino').textContent = correo;
+    document.getElementById('codigo-input').value = '';
+    mostrarMensaje('codigo-mensaje', '');
 
-                mostrarMensaje(
-                    'registro-mensaje',
-                    resultado.mensaje,
-                    true
-                );
+    iniciarTemporizador(expiraEn);
+    document.getElementById('codigo-input').focus();
+}
 
-                history.replaceState(
-                    { pagina: 'principal', autenticado: true },
-                    '',
-                    location.pathname + location.search
-                );
+function iniciarTemporizador(expiraEn) {
+    clearInterval(temporizadorCodigo);
 
-                setTimeout(() => mostrarInicioPrincipal(false), 500);
-            } catch (error) {
-                mostrarMensaje('registro-mensaje', error.message);
-                botonVerificar.disabled = false;
-            } finally {
-                botonVerificar.textContent = 'Verificar código';
-            }
-        });
+    const etiqueta = document.getElementById('codigo-tiempo');
+    const botonReenviar = document.getElementById('codigo-reenviar');
+    const expira = new Date(expiraEn).getTime();
+    const habilitaReenvio = expira - 90 * 1000; // pasados 30 s del envío
+
+    function tic() {
+        const restante = Math.max(0, Math.round((expira - Date.now()) / 1000));
+        const min = String(Math.floor(restante / 60)).padStart(2, '0');
+        const seg = String(restante % 60).padStart(2, '0');
+
+        etiqueta.textContent = restante > 0
+            ? `El código caduca en ${min}:${seg}`
+            : 'El código ha caducado. Solicita uno nuevo.';
+
+        botonReenviar.disabled = Date.now() < habilitaReenvio;
+
+        if (restante === 0) clearInterval(temporizadorCodigo);
     }
 
-    if (botonReenviar) {
-        botonReenviar.addEventListener('click', async () => {
-            botonReenviar.disabled = true;
-            botonReenviar.textContent = 'Enviando...';
+    tic();
+    temporizadorCodigo = setInterval(tic, 1000);
+}
 
-            try {
-                const resultado = await obtenerRespuesta('/registro/reenviar-codigo', {
-                    method: 'POST',
-                    body: JSON.stringify({ usuario: usuarioPendiente })
-                });
+function configurarPasoCodigo() {
+    const formCodigo = document.getElementById('form-codigo');
+    const botonReenviar = document.getElementById('codigo-reenviar');
+    const botonCambiar = document.getElementById('codigo-cambiar');
+    const input = document.getElementById('codigo-input');
 
-                mostrarMensaje('registro-mensaje', resultado.mensaje, true);
-                botonReenviar.style.display = 'none';
-                botonVerificar.disabled = false;
-                iniciarTemporizador(resultado.expiraEn);
-                campoCodigo().value = '';
-                campoCodigo().focus();
-            } catch (error) {
-                mostrarMensaje('registro-mensaje', error.message);
-                botonReenviar.disabled = false;
-            } finally {
-                botonReenviar.textContent = 'Reenviar código';
-            }
-        });
-    }
+    if (!formCodigo) return;
+
+    input.addEventListener('input', () => {
+        input.value = input.value.replace(/\D/g, '').slice(0, 6);
+    });
+
+    formCodigo.addEventListener('submit', async event => {
+        event.preventDefault();
+
+        const codigo = input.value.trim();
+
+        if (!/^\d{6}$/.test(codigo)) {
+            mostrarMensaje('codigo-mensaje', 'Ingresa el código de 6 dígitos.');
+            return;
+        }
+
+        const boton = formCodigo.querySelector('[type="submit"]');
+        boton.disabled = true;
+        boton.textContent = 'Verificando...';
+
+        try {
+            const resultado = await obtenerRespuesta('/registro/verificar', {
+                method: 'POST',
+                body: JSON.stringify({ usuario: usuarioPendiente, codigo })
+            });
+
+            clearInterval(temporizadorCodigo);
+            establecerUsuarioActual(resultado.usuario, resultado.token);
+
+            history.replaceState(
+                { pagina: 'principal', autenticado: true },
+                '',
+                location.pathname + location.search
+            );
+
+            mostrarInicioPrincipal(false);
+        } catch (error) {
+            mostrarMensaje('codigo-mensaje', error.message);
+        } finally {
+            boton.disabled = false;
+            boton.textContent = 'Verificar y crear cuenta';
+        }
+    });
+
+    botonReenviar.addEventListener('click', async () => {
+        botonReenviar.disabled = true;
+
+        try {
+            const resultado = await obtenerRespuesta('/registro/reenviar-codigo', {
+                method: 'POST',
+                body: JSON.stringify({ usuario: usuarioPendiente })
+            });
+
+            input.value = '';
+            iniciarTemporizador(resultado.expiraEn);
+            mostrarMensaje('codigo-mensaje', resultado.mensaje, true);
+        } catch (error) {
+            mostrarMensaje('codigo-mensaje', error.message);
+        }
+    });
+
+    botonCambiar.addEventListener('click', () => {
+        clearInterval(temporizadorCodigo);
+        usuarioPendiente = null;
+        document.getElementById('paso-codigo').style.display = 'none';
+        document.getElementById('form-registro').style.display = '';
+    });
 }
 
 /* =========================================
@@ -486,6 +496,7 @@ function actualizarNavegacionUsuario() {
     const lista = document.querySelector('.nav-links');
     if (!lista) return;
 
+    // Si en tu barra principal existe un enlace llamado "Mis simulaciones", lo renombramos a "Mi progreso"
     lista.querySelectorAll('a').forEach(enlace => {
         if (enlace.textContent.trim().toLowerCase() === 'mis simulaciones') {
             enlace.textContent = 'Mi progreso';
@@ -517,6 +528,9 @@ function actualizarNavegacionUsuario() {
             <a href="#" id="nav-usuario-btn" aria-expanded="false"></a>
             <ul class="dropdown-menu" id="menu-usuario" style="display:none">
                 <li>
+                    <a href="#" id="btn-mi-progreso">Mi progreso</a>
+                </li>
+                <li>
                     <a href="#" id="btn-cerrar-sesion">Cerrar sesión</a>
                 </li>
             </ul>
@@ -533,6 +547,13 @@ function actualizarNavegacionUsuario() {
             menuUsuario.style.display = abierto ? 'none' : 'block';
             botonUsuario.setAttribute('aria-expanded', String(!abierto));
         });
+
+        elementoUsuario.querySelector('#btn-mi-progreso').addEventListener('click', event => {
+            event.preventDefault();
+            menuUsuario.style.display = 'none';
+            abrirMiProgreso();
+        });
+
         elementoUsuario.querySelector('#btn-cerrar-sesion').addEventListener('click', event => {
             event.preventDefault();
             cerrarSesion();
@@ -575,6 +596,7 @@ async function abrirMiProgreso() {
 
         main.innerHTML = datos.html;
 
+        // Ejecutamos los scripts internos de la vista Mi Progreso
         main.querySelectorAll('script').forEach(scriptViejo => {
             const scriptNuevo = document.createElement('script');
             scriptNuevo.text = scriptViejo.text;
@@ -588,6 +610,7 @@ async function abrirMiProgreso() {
     }
 }
 
+
 /* =========================================
    INICIO PRINCIPAL Y CIERRE DE SESIÓN
 ========================================= */
@@ -597,6 +620,8 @@ function mostrarInicioPrincipal(limpiarHistorial = false) {
 
     if (!main) return;
 
+    // Se elimina el contenido de autenticación.
+    // Tu script principal podrá reconstruir o cargar la portada.
     main.innerHTML = `
         <section class="hero">
             <iframe id="frame-fondo" class="fondo-animado"></iframe>
@@ -623,6 +648,7 @@ function mostrarInicioPrincipal(limpiarHistorial = false) {
     actualizarNavegacionUsuario();
     configurarNavegacionAutenticacion();
 
+    // Reutiliza el mecanismo que ya carga el fondo desde la API.
     if (typeof cargarConfiguracion === 'function') {
         cargarConfiguracion();
     } else {
@@ -638,6 +664,7 @@ function mostrarInicioPrincipal(limpiarHistorial = false) {
 function cerrarSesion() {
     limpiarUsuarioActual();
 
+    // No se conserva una entrada de historial a una vista de login.
     history.replaceState(
         { pagina: 'principal', autenticado: false },
         '',
@@ -657,6 +684,8 @@ window.addEventListener('popstate', () => {
         return;
     }
 
+    // Si se vuelve a una vista privada o de autenticación tras cerrar
+    // sesión, se fuerza el regreso a la portada pública.
     if (vistaAuthActual || location.hash === '#inicio-sesion' ||
         location.hash === '#registro') {
         history.replaceState(
@@ -677,6 +706,8 @@ document.addEventListener('DOMContentLoaded', () => {
     configurarNavegacionAutenticacion();
     actualizarNavegacionUsuario();
 
+    // Si el usuario recarga mientras está en una vista de autenticación,
+    // no se muestra el formulario cuando ya existe sesión.
     if (obtenerUsuarioActual()) {
         mostrarInicioPrincipal(false);
     }
