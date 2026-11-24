@@ -3,339 +3,186 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const dotenv = require('dotenv');
 const { Pool } = require('pg');
 const nodemailer = require('nodemailer');
+const CryptoJS = require('crypto-js');
+
+dotenv.config();
 
 const app = express();
-
-/* ==================================================
-   CONFIGURACIÓN GENERAL Y BASE DE DATOS (NEON)
-================================================== */
-
 app.set('trust proxy', 1);
 
-const PORT = process.env.PORT || 5000;
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
+app.use(cors());
+app.use(express.json({ limit: '20kb' }));
 
-const DATABASE_URL =
-    process.env.DATABASE_URL ||
-    'postgresql://neondb_owner:npg_hFLcE4gkA5Gi@ep-tiny-credit-bcptlj02-pooler.c-16.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require';
+/*==================================================
+ARCHIVOS ESTÁTICOS GENERALES
+==================================================*/
+app.use('/imagenes', express.static(path.join(__dirname, 'imagenes')));
+app.use('/fondos', express.static(path.join(__dirname, 'fondos')));
+app.use('/cssvistas', express.static(path.join(__dirname, 'cssvistas')));
+app.use('/vistas', express.static(path.join(__dirname, 'vistas')));
 
-const pool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false
-    }
-});
+/*==================================================
+ARCHIVOS ESTÁTICOS DE SIMULACIONES (NUEVA ESTRUCTURA)
+==================================================*/
+app.use('/juegos/cazador', express.static(path.join(__dirname, 'simulaciones', 'cazador-complejo')));
+app.use('/juegos/residuo', express.static(path.join(__dirname, 'simulaciones', 'residuo')));
+app.use('/juegos/raicesypotencias', express.static(path.join(__dirname, 'simulaciones', 'raicesypotencias')));
+app.use('/juegos/armonicos', express.static(path.join(__dirname, 'simulaciones', 'armonicos')));
+app.use('/juegos/cauchy', express.static(path.join(__dirname, 'simulaciones', 'cauchy')));
+app.use('/juegos/mapeos', express.static(path.join(__dirname, 'simulaciones', 'mapeos')));
+app.use('/js', express.static(path.join(__dirname, 'js')));
 
-async function inicializarBaseDeDatos() {
-    const client = await pool.connect();
-    try {
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS usuario (
-                id_usuario BIGSERIAL PRIMARY KEY,
-                nombre_usuario VARCHAR(30) NOT NULL UNIQUE,
-                correo TEXT NOT NULL,
-                password_hash CHAR(64) NOT NULL,
-                password_salt CHAR(32) NOT NULL,
-                correo_verificado BOOLEAN NOT NULL DEFAULT FALSE
-            );
 
-            CREATE TABLE IF NOT EXISTS registro_pendiente (
-                id_pendiente BIGSERIAL PRIMARY KEY,
-                nombre_usuario VARCHAR(30) NOT NULL,
-                correo TEXT NOT NULL,
-                password_hash CHAR(64) NOT NULL,
-                password_salt CHAR(32) NOT NULL,
-                fecha_creacion TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_registro_pendiente_usuario
-                ON registro_pendiente (LOWER(nombre_usuario));
-
-            CREATE TABLE IF NOT EXISTS codigo_de_verificacion (
-                id_codigo BIGSERIAL PRIMARY KEY,
-                codigo_temporal CHAR(6) NOT NULL,
-                fecha_expiracion TIMESTAMPTZ NOT NULL,
-                usado BOOLEAN NOT NULL DEFAULT FALSE,
-                id_pendiente BIGINT NOT NULL
-                    REFERENCES registro_pendiente(id_pendiente) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_codigo_verificacion_pendiente
-                ON codigo_de_verificacion(id_pendiente);
-
-            CREATE TABLE IF NOT EXISTS progreso (
-                id_progreso BIGSERIAL PRIMARY KEY,
-                id_usuario BIGINT NOT NULL
-                    REFERENCES usuario(id_usuario) ON DELETE CASCADE,
-                numero_de_intento INTEGER NOT NULL,
-                fecha_de_guardado TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                unidad_tematica VARCHAR(150) NOT NULL,
-                calificacion NUMERIC(4,2) NOT NULL
-                    CHECK (calificacion >= 0 AND calificacion <= 10)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_progreso_usuario
-                ON progreso(id_usuario);
-
-            CREATE TABLE IF NOT EXISTS desarrollo_simulacion (
-                id_registro BIGSERIAL PRIMARY KEY,
-                id_usuario BIGINT NOT NULL
-                    REFERENCES usuario(id_usuario) ON DELETE CASCADE,
-                fecha_de_guardado TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                desarrollo_id VARCHAR(100) NOT NULL,
-                simulacion_id VARCHAR(150) NOT NULL,
-                ruta_pdf TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_desarrollo_usuario
-                ON desarrollo_simulacion(id_usuario);
-        `);
-
-        const existeDemo = await client.query(
-            'SELECT id_usuario FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1)',
-            ['usuario_p1']
-        );
-
-        if (existeDemo.rows.length === 0) {
-            const { salt, hash } = crearHashPassword('Qw1234567$');
-            await client.query(
-                `INSERT INTO usuario (nombre_usuario, correo, password_hash, password_salt, correo_verificado)
-                 VALUES ($1, $2, $3, $4, TRUE)`,
-                ['usuario_p1', 'demo@gmail.com', hash, salt]
-            );
-        }
-
-        console.log('Base de datos Neon conectada y verificada correctamente.');
-    } catch (error) {
-        console.error('Error al inicializar la base de datos:', error);
-    } finally {
-        client.release();
-    }
-}
-
-app.use(cors({
-    origin: FRONTEND_ORIGIN
-        ? FRONTEND_ORIGIN.split(',').map(origin => origin.trim())
-        : true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true
-}));
-
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
-
-const ROOT = __dirname;
-const BUILD_DIR = path.join(ROOT, 'build');
-
-const rutaCssMayus = path.join(ROOT, 'CSSvistas');
-const rutaCssMinus = path.join(ROOT, 'cssvistas');
-const carpetaCssReal = fs.existsSync(rutaCssMayus) ? rutaCssMayus : rutaCssMinus;
-
-const DIR = {
-    imagenes: path.join(ROOT, 'imagenes'),
-    fondos: path.join(ROOT, 'fondos'),
-    css: carpetaCssReal,
-    vistas: path.join(ROOT, 'vistas'),
-    js: path.join(ROOT, 'js'),
-    simulaciones: path.join(ROOT, 'simulaciones')
-};
-
-/* ==================================================
-   DIAGNÓSTICO Y ARCHIVOS ESTÁTICOS
-================================================== */
-
-Object.entries(DIR).forEach(([nombre, ruta]) => {
-    if (!fs.existsSync(ruta)) {
-        console.warn(`[ADVERTENCIA] No existe el directorio "${nombre}": ${ruta}`);
-    }
-});
-
-app.use('/imagenes', express.static(DIR.imagenes, { fallthrough: false, maxAge: '1d' }));
-app.use('/fondos', express.static(DIR.fondos, { fallthrough: false, maxAge: '1d' }));
-app.use('/cssvistas', express.static(DIR.css, { fallthrough: false, maxAge: '1d' }));
-app.use('/vistas', express.static(DIR.vistas, { fallthrough: false, maxAge: '1d' }));
-// Archivos locales de KaTeX (ubicados en la raíz del proyecto junto a vistas/)
-app.use('/fonts', express.static(path.join(ROOT, 'fonts'), { fallthrough: false, maxAge: '7d' }));
-app.get('/katex.min.css', (req, res) => {
-    res.sendFile(path.join(ROOT, 'katex.min.css'));
-});
-app.get('/katex.min.js', (req, res) => {
-    res.sendFile(path.join(ROOT, 'katex.min.js'));
-});
-app.use('/js', express.static(DIR.js, { fallthrough: false, maxAge: '1d' }));
-
-const juegos = [
-    ['cazador', 'cazador-complejo'],
-    ['residuo', 'residuo'],
-    ['raicesypotencias', 'raicesypotencias'],
-    ['armonicos', 'armonicos'],
-    ['cauchy', 'cauchy'],
-    ['mapeos', 'mapeos']
-];
-
-juegos.forEach(([url, carpeta]) => {
-    const ruta = path.join(DIR.simulaciones, carpeta);
-    app.use(`/juegos/${url}`, express.static(ruta, { fallthrough: false, maxAge: '1h' }));
-});
-
-if (fs.existsSync(BUILD_DIR)) {
-    app.use(express.static(BUILD_DIR, { index: false, fallthrough: true, maxAge: '1h' }));
-}
-/* ==================================================
-   FUNCIONES AUXILIARES DE VISTAS
-================================================== */
-
-function leerHtml(nombreArchivo) {
-    const ruta = path.join(DIR.vistas, nombreArchivo);
-    return fs.promises.readFile(ruta, 'utf8');
-}
-
-function responderVista(res, nombreArchivo, cssUrl = '') {
-    leerHtml(nombreArchivo)
-        .then(html => {
-            res.set('Cache-Control', 'no-store');
-            res.json({ cssUrl, html });
-        })
-        .catch(error => {
-            console.error(`Error leyendo ${nombreArchivo}:`, error.message);
-            res.status(500).json({
-                error: `No se pudo cargar ${nombreArchivo}.`,
-                detalle: process.env.NODE_ENV === 'production' ? undefined : error.message
-            });
-        });
-}
-
-function responderJuego(res, carpeta) {
-    const rutaJuego = `/juegos/${carpeta}/index.html`;
-    const html = `
-        <div class="contenedor-juego-flotante"
-             style="width:100%;height:calc(100vh - 60px);display:flex;box-sizing:border-box;padding:10px;">
-            <iframe
-                src="${rutaJuego}"
-                title="Simulación COMPLEXLAB"
-                style="width:100%;height:100%;border:none;border-radius:15px;background:transparent;"
-                loading="eager"
-                allow="autoplay"
-                allowfullscreen>
-            </iframe>
-        </div>
-    `;
-    res.json({ cssUrl: '', html });
-}
-
-function enviarError(res, status, mensaje) {
-    return res.status(status).json({ error: mensaje });
-}
-
-/* ==================================================
-   SALUD Y CONFIGURACIÓN
-================================================== */
-
-app.get('/api/health', async (req, res) => {
-    try {
-        await pool.query('SELECT 1');
-        res.status(200).json({
-            estado: 'activo',
-            baseDeDatos: 'conectada',
-            servidor: 'COMPLEXLAB',
-            fecha: new Date().toISOString()
-        });
-    } catch (error) {
-        res.status(500).json({
-            estado: 'degradado',
-            baseDeDatos: 'error',
-            error: error.message
-        });
-    }
-});
-
+/*==================================================
+CONFIGURACIÓN
+==================================================*/
 app.get('/api/configuracion', (req, res) => {
-    res.json({
-        fondoAnimado: '/fondos/complejo.html'
-    });
+    res.json({ fondoAnimado: '/fondos/complejo.html' });
 });
 
-/* ==================================================
-   CATÁLOGO DE SIMULACIONES Y JUEGOS
-================================================== */
-
-app.get('/api/simulaciones', async (req, res) => {
+/*==================================================
+/*==================================================
+CATÁLOGO DE SIMULACIONES
+==================================================*/
+app.get('/api/simulaciones', (req, res) => {
     const simulaciones = [
-        { titulo: 'Suma, resta y multiplicación', imagen: '/imagenes/imgcazador-complejo.png', url: '/api/cargar-juego/cazador' },
-        { titulo: 'Reactor Cuántico RLC', imagen: '/imagenes/Residuo.png', url: '/api/cargar-juego/residuo' },
-        { titulo: 'La aventura de Moivre', imagen: '/imagenes/raicesypotencias.png', url: '/api/cargar-juego/raicesypotencias' },
-        { titulo: 'Restaurador armónico', imagen: '/imagenes/armonicos.png', url: '/api/cargar-juego/armonicos' },
-        { titulo: 'Mapeo Conformal', imagen: '/imagenes/mapeos.png', url: '/api/cargar-juego/mapeos' },
-        { titulo: 'Túnel Aerodinámico de Argand', imagen: '/imagenes/cauchy.png', url: '/api/cargar-juego/cauchy' }
+        {
+            titulo: 'suma, resta y multiplicacion',
+            imagen: '/imagenes/imgcazador-complejo.png',
+            url: '/api/cargar-juego/cazador'
+        },
+        {
+            titulo: 'Reactor Cuántico RLC',
+            imagen: '/imagenes/Residuo.png',
+            url: '/api/cargar-juego/residuo'
+        },
+        {
+            titulo: 'La aventura de Moivre',
+            imagen: '/imagenes/raicesypotencias.png',
+            url: '/api/cargar-juego/raicesypotencias'
+        },
+        {
+            titulo: 'Restaurador armonico',
+            imagen: '/imagenes/armonicos.png',
+            url: '/api/cargar-juego/armonicos'
+        },
+        {
+            titulo: 'Mapeo Conformal', 
+            imagen: '/imagenes/mapeos.png',
+            url: '/api/cargar-juego/mapeos'
+        },
+        {
+            titulo: 'Túnel Aerodinámico de Argand',
+            imagen: '/imagenes/cauchy.png',
+            url: '/api/cargar-juego/cauchy'
+        }
     ];
 
-    try {
-        const html = await leerHtml('simulaciones.html');
+    const rutaHtml = path.join(__dirname, 'vistas', 'simulaciones.html');
+
+    fs.readFile(rutaHtml, 'utf8', (err, html) => {
+        if (err) {
+            console.log(err);
+            return res.status(500).json({ error: 'No se cargó simulaciones.html' });
+        }
+
         const tarjetas = simulaciones.map(sim => `
             <div class="tarjeta-simulacion" onclick="irASimulacion(event, '${sim.url}')">
-                <img src="${sim.imagen}" alt="${sim.titulo}" loading="lazy">
+                <img src="${sim.imagen}" alt="${sim.titulo}">
                 <h3>${sim.titulo}</h3>
             </div>
         `).join('');
 
+        const htmlFinal = html.replace(/{{tarjetas}}/g, tarjetas);
+
         res.json({
             cssUrl: '/cssvistas/simulaciones.css',
-            html: html.replace(/{{tarjetas}}/g, tarjetas)
+            html: htmlFinal
         });
-    } catch (error) {
-        console.error('Error cargando simulaciones:', error.message);
-        enviarError(res, 500, 'No se pudo cargar simulaciones.html.');
-    }
+    });
 });
 
-app.get('/api/cargar-juego/cazador', (req, res) => responderJuego(res, 'cazador-complejo'));
-app.get('/api/cargar-juego/residuo', (req, res) => responderJuego(res, 'residuo'));
-app.get('/api/cargar-juego/raicesypotencias', (req, res) => responderJuego(res, 'raicesypotencias'));
-app.get('/api/cargar-juego/armonicos', (req, res) => responderJuego(res, 'armonicos'));
-app.get('/api/cargar-juego/mapeos', (req, res) => responderJuego(res, 'mapeos'));
-app.get('/api/cargar-juego/cauchy', (req, res) => responderJuego(res, 'cauchy'));
+/*==================================================
+ENDPOINTS: INCRUSTAR JUEGOS (EVITA REDIRECCIONES)
+==================================================*/
+app.get('/api/cargar-juego/cazador', (req, res) => {
+    const htmlIncrustado = '<div class="contenedor-juego-flotante" style="width: 100%; height: calc(100vh - 60px); display: flex; box-sizing: border-box; padding: 10px;"><iframe src="/juegos/cazador/index.html" style="width: 100%; height: 100%; border: none; border-radius: 15px; background: transparent;"></iframe></div>';
+    res.json({ cssUrl: '', html: htmlIncrustado });
+});
 
-/* ==================================================
-   VARIABLE COMPLEJA Y TEMAS
-================================================== */
+app.get('/api/cargar-juego/residuo', (req, res) => {
+    const htmlIncrustado = '<div class="contenedor-juego-flotante" style="width: 100%; height: calc(100vh - 60px); display: flex; box-sizing: border-box; padding: 10px;"><iframe src="/juegos/residuo/index.html" style="width: 100%; height: 100%; border: none; border-radius: 15px; background: transparent;"></iframe></div>';
+    res.json({ cssUrl: '', html: htmlIncrustado });
+});
 
-app.get('/api/variable-compleja', async (req, res) => {
+app.get('/api/cargar-juego/raicesypotencias', (req, res) => {
+    const htmlIncrustado = '<div class="contenedor-juego-flotante" style="width: 100%; height: calc(100vh - 60px); display: flex; box-sizing: border-box; padding: 10px;"><iframe src="/juegos/raicesypotencias/index.html" style="width: 100%; height: 100%; border: none; border-radius: 15px; background: transparent;"></iframe></div>';
+    res.json({ cssUrl: '', html: htmlIncrustado });
+});
+
+app.get('/api/cargar-juego/armonicos', (req, res) => {
+    const htmlIncrustado = '<div class="contenedor-juego-flotante" style="width: 100%; height: calc(100vh - 60px); display: flex; box-sizing: border-box; padding: 10px;"><iframe src="/juegos/armonicos/index.html" style="width: 100%; height: 100%; border: none; border-radius: 15px; background: transparent;"></iframe></div>';
+    res.json({ cssUrl: '', html: htmlIncrustado });
+});
+
+app.get('/api/cargar-juego/mapeos', (req, res) => {
+    const htmlIncrustado = '<div class="contenedor-juego-flotante" style="width: 100%; height: calc(100vh - 60px); display: flex; box-sizing: border-box; padding: 10px;"><iframe src="/juegos/mapeos/index.html" style="width: 100%; height: 100%; border: none; border-radius: 15px; background: transparent;"></iframe></div>';
+    res.json({ cssUrl: '', html: htmlIncrustado });
+});
+
+app.get('/api/cargar-juego/cauchy', (req, res) => {
+    const htmlIncrustado = '<div class="contenedor-juego-flotante" style="width: 100%; height: calc(100vh - 60px); display: flex; box-sizing: border-box; padding: 10px;"><iframe src="/juegos/cauchy/index.html" style="width: 100%; height: 100%; border: none; border-radius: 15px; background: transparent;"></iframe></div>';
+    res.json({ cssUrl: '', html: htmlIncrustado });
+});
+
+/*==================================================
+VARIABLE COMPLEJA
+==================================================*/
+app.get('/api/variable-compleja', (req, res) => {
     const cursos = [
         { id: 'algebra', titulo: 'Álgebra Compleja', imagen: '/imagenes/algebra.png', activo: true },
         { id: 'derivacion', titulo: 'Derivación Compleja', imagen: '/imagenes/derivacion.png', activo: false },
         { id: 'integracion', titulo: 'Integración Compleja', imagen: '/imagenes/integracion.png', activo: false }
     ];
 
-    try {
-        const html = await leerHtml('caps-de-var-compleja.html');
+    const rutaHtml = path.join(__dirname, 'vistas', 'caps-de-var-compleja.html');
+
+    fs.readFile(rutaHtml, 'utf8', (err, html) => {
+        if (err) {
+            console.log(err);
+            return res.status(500).json({ error: 'No se cargó caps-de-var-compleja.html' });
+        }
+
         const tarjetas = cursos.map(cur => `
             <div class="tarjeta-curso ${cur.activo ? 'activo' : ''}" data-id="${cur.id}">
                 <div class="contenedor-img">
-                    <img src="${cur.imagen}" alt="${cur.titulo}" loading="lazy">
+                    <img src="${cur.imagen}" alt="${cur.titulo}">
                 </div>
                 <h3>${cur.titulo}</h3>
             </div>
         `).join('');
 
+        const htmlFinal = html.replace(/{{tarjetas_cursos}}/g, tarjetas);
+
         res.json({
             cssUrl: '/cssvistas/caps-de-var-complejacss.css',
-            html: html.replace(/{{tarjetas_cursos}}/g, tarjetas)
+            html: htmlFinal
         });
-    } catch (error) {
-        console.error('Error cargando variable compleja:', error.message);
-        enviarError(res, 500, 'No se pudo cargar caps-de-var-compleja.html.');
-    }
+    });
 });
 
-app.get('/api/variable-compleja/algebra', async (req, res) => {
+/*==================================================
+TEMAS DE ÁLGEBRA COMPLEJA
+==================================================*/
+app.get('/api/variable-compleja/algebra', (req, res) => {
     const temas = [
         {
             id: 'suma-compleja',
             titulo: 'Suma Compleja',
-            color: 'rgba(74, 189, 172, 0.2)',
+            color: 'rgba(74, 189, 172, 0.2)', 
             descripcion: 'Aprende a combinar las partes reales e imaginarias de forma independiente. Representa la traslación de vectores en el plano de Argand.',
             urlSimulacion: '/api/cargar-juego/cazador'
         },
@@ -355,30 +202,42 @@ app.get('/api/variable-compleja/algebra', async (req, res) => {
         }
     ];
 
-    try {
-        const html = await leerHtml('temas-algebra.html');
+    const rutaHtml = path.join(__dirname, 'vistas', 'temas-algebra.html');
+
+    fs.readFile(rutaHtml, 'utf8', (err, html) => {
+        if (err) {
+            console.log(err);
+            return res.status(500).json({ error: 'No se cargó temas-algebra.html' });
+        }
+
         const tarjetas = temas.map(tema => `
-            <div class="tarjeta-tema" style="background:${tema.color};" onclick="redirigirTema(event, '${tema.id}')">
+            <div class="tarjeta-tema" style="background: ${tema.color};" onclick="redirigirTema(event, '${tema.id}')">
+
                 <div class="contenido-tema">
                     <h3>${tema.titulo}</h3>
                     <p class="desc">${tema.descripcion}</p>
                 </div>
                 <div class="acciones-tema">
-                    <button class="btn-tema btn-sim" onclick="irASimulacion(event, '${tema.urlSimulacion}')">Simulación</button>
+                    ${tema.urlSimulacion !== '#' ? `<button class="btn-tema btn-sim" onclick="irASimulacion(event, '${tema.urlSimulacion}')">Simulación</button>` : '<span class="no-sim">Sin simulación</span>'}
                     <button class="btn-tema btn-test" onclick="abrirTestProximamente(event)">Test</button>
                 </div>
             </div>
         `).join('');
 
+        const htmlFinal = html.replace(/{{tarjetas_temas}}/g, tarjetas);
+
         res.json({
             cssUrl: '/cssvistas/temas-algebra.css',
-            html: html.replace(/{{tarjetas_temas}}/g, tarjetas)
+            html: htmlFinal
         });
-    } catch (error) {
-        enviarError(res, 500, 'No se pudo cargar temas-algebra.html.');
-    }
+    });
 });
-app.get('/api/variable-compleja/derivacion', async (req, res) => {
+
+
+/*==================================================
+TEMAS DE DERIVACIÓN COMPLEJA
+==================================================*/
+app.get('/api/variable-compleja/derivacion', (req, res) => {
     const temas = [
         {
             id: 'bases-derivacion',
@@ -403,33 +262,40 @@ app.get('/api/variable-compleja/derivacion', async (req, res) => {
         }
     ];
 
-    try {
-        const html = await leerHtml('temas-derivacion.html');
+    const rutaHtml = path.join(__dirname, 'vistas', 'temas-derivacion.html');
+
+    fs.readFile(rutaHtml, 'utf8', (err, html) => {
+        if (err) {
+            console.log(err);
+            return res.status(500).json({ error: 'No se cargó temas-derivacion.html' });
+        }
+
         const tarjetas = temas.map(tema => `
-            <div class="tarjeta-tema" style="background:${tema.color};" onclick="redirigirTema(event, '${tema.id}')">
+            <div class="tarjeta-tema" style="background: ${tema.color};" onclick="redirigirTema(event, '${tema.id}')">
                 <div class="contenido-tema">
                     <h3>${tema.titulo}</h3>
                     <p class="desc">${tema.descripcion}</p>
                 </div>
                 <div class="acciones-tema">
-                    ${tema.urlSimulacion !== '#'
-                        ? `<button class="btn-tema btn-sim" onclick="irASimulacion(event, '${tema.urlSimulacion}')">Simulación</button>`
-                        : '<span class="no-sim">Sin simulación</span>'}
+                    ${tema.urlSimulacion !== '#' ? `<button class="btn-tema btn-sim" onclick="irASimulacion(event, '${tema.urlSimulacion}')">Simulación</button>` : '<span class="no-sim">Sin simulación</span>'}
                     <button class="btn-tema btn-test" onclick="abrirTestProximamente(event)">Test</button>
                 </div>
             </div>
         `).join('');
 
+        const htmlFinal = html.replace(/{{tarjetas_temas}}/g, tarjetas);
+
         res.json({
             cssUrl: '/cssvistas/temas-algebra.css',
-            html: html.replace(/{{tarjetas_temas}}/g, tarjetas)
+            html: htmlFinal
         });
-    } catch (error) {
-        enviarError(res, 500, 'No se pudo cargar temas-derivacion.html.');
-    }
+    });
 });
 
-app.get('/api/variable-compleja/integracion', async (req, res) => {
+/*==================================================
+TEMAS DE INTEGRACIÓN COMPLEJA
+==================================================*/
+app.get('/api/variable-compleja/integracion', (req, res) => {
     const temas = [
         {
             id: 'bases-integracion',
@@ -454,117 +320,317 @@ app.get('/api/variable-compleja/integracion', async (req, res) => {
         }
     ];
 
-    try {
-        const html = await leerHtml('temas-integracion.html');
+    const rutaHtml = path.join(__dirname, 'vistas', 'temas-integracion.html');
+
+    fs.readFile(rutaHtml, 'utf8', (err, html) => {
+        if (err) {
+            console.log(err);
+            return res.status(500).json({ error: 'No se cargó temas-integracion.html' });
+        }
+
         const tarjetas = temas.map(tema => `
-            <div class="tarjeta-tema" style="background:${tema.color};" onclick="redirigirTema(event, '${tema.id}')">
+            <div class="tarjeta-tema" style="background: ${tema.color};" onclick="redirigirTema(event, '${tema.id}')">
                 <div class="contenido-tema">
                     <h3>${tema.titulo}</h3>
                     <p class="desc">${tema.descripcion}</p>
                 </div>
                 <div class="acciones-tema">
-                    ${tema.urlSimulacion !== '#'
-                        ? `<button class="btn-tema btn-sim" onclick="irASimulacion(event, '${tema.urlSimulacion}')">Simulación</button>`
-                        : '<span class="no-sim">Sin simulación</span>'}
+                    ${tema.urlSimulacion !== '#' ? `<button class="btn-tema btn-sim" onclick="irASimulacion(event, '${tema.urlSimulacion}')">Simulación</button>` : '<span class="no-sim">Sin simulación</span>'}
                     <button class="btn-tema btn-test" onclick="abrirTestProximamente(event)">Test</button>
                 </div>
             </div>
         `).join('');
 
+        const htmlFinal = html.replace(/{{tarjetas_temas}}/g, tarjetas);
+
         res.json({
             cssUrl: '/cssvistas/temas-algebra.css',
-            html: html.replace(/{{tarjetas_temas}}/g, tarjetas)
+            html: htmlFinal
         });
-    } catch (error) {
-        enviarError(res, 500, 'No se pudo cargar temas-integracion.html.');
-    }
+    });
 });
 
-const archivosTemas = {
-    'suma-compleja': 'tema-suma.html',
-    'multiplicacion-compleja': 'tema-multiplicacion.html',
-    'teorema-demoivre': 'tema-demoivre.html',
-    'bases-derivacion': 'tema-bases-derivacion.html',
-    'derivacion-nivel-medio': 'tema-derivacion-medio.html',
-    'cauchy-riemann-laplace': 'tema-cauchy-riemann.html',
-    'bases-integracion': 'tema-bases-integracion.html',
-    'integral-cauchy': 'tema-integral-cauchy.html',
-    'teorema-residuo': 'tema-teorema-residuo.html'
-};
+/*==================================================
+VISTAS DE CONTENIDO ESPECÍFICO POR TEMA (HTML PURO)
+==================================================*/
+app.get('/api/contenido-tema/:id', (req, res) => {
+    const temaId = req.params.id;
+    let nombreArchivo = "";
 
-app.get('/api/contenido-tema/:id', async (req, res) => {
-    const nombreArchivo = archivosTemas[req.params.id];
-    if (!nombreArchivo) return enviarError(res, 404, 'Tema no encontrado.');
+    if (temaId === 'suma-compleja') nombreArchivo = 'tema-suma.html';
+    else if (temaId === 'multiplicacion-compleja') nombreArchivo = 'tema-multiplicacion.html';
+    else if (temaId === 'teorema-demoivre') nombreArchivo = 'tema-demoivre.html';
+    else if (temaId === 'bases-derivacion') nombreArchivo = 'tema-bases-derivacion.html';
+    else if (temaId === 'derivacion-nivel-medio') nombreArchivo = 'tema-derivacion-medio.html';
+    else if (temaId === 'cauchy-riemann-laplace') nombreArchivo = 'tema-cauchy-riemann.html';
+    else if (temaId === 'bases-integracion') nombreArchivo = 'tema-bases-integracion.html';
+    else if (temaId === 'integral-cauchy') nombreArchivo = 'tema-integral-cauchy.html';
+    else if (temaId === 'teorema-residuo') nombreArchivo = 'tema-teorema-residuo.html';
+    else return res.status(404).json({ error: 'Tema no encontrado' });
 
-    try {
-        const html = await leerHtml(nombreArchivo);
-        res.json({ html });
-    } catch (error) {
-        enviarError(res, 500, `No se pudo leer ${nombreArchivo}.`);
-    }
+    const rutaHtml = path.join(__dirname, 'vistas', nombreArchivo);
+
+    fs.readFile(rutaHtml, 'utf8', (err, html) => {
+        if (err) {
+            console.log(err);
+            return res.status(500).json({ error: `No se pudo leer ${nombreArchivo}` });
+        }
+        res.json({ html: html });
+    });
 });
 
-app.get('/api/sobre-nosotros', async (req, res) => {
+/*==================================================
+SOBRE NOSOTROS
+==================================================*/
+app.get('/api/sobre-nosotros', (req, res) => {
     const datosSobreNosotros = {
-        mision: 'Proveer a los estudiantes de la Escuela Superior de Cómputo (ESCOM) una herramienta interactiva y visual que facilite la comprensión profunda de la Variable Compleja, conectando la teoría matemática con aplicaciones reales en sistemas computacionales.',
-        vision: 'Ser la plataforma de simulación matemática referente dentro de la ESCOM, impulsando el rendimiento académico y el desarrollo de software basado en modelos analíticos complejos.',
+        mision: "Proveer a los estudiantes de la Escuela Superior de Cómputo (ESCOM) una herramienta interactiva y visual que facilite la comprensión profunda de la Variable Compleja, conectando la teoría matemática con aplicaciones reales en sistemas computacionales.",
+        vision: "Ser la plataforma de simulación matemática referente dentro de la ESCOM, impulsando el rendimiento académico y el desarrollo de software basado en modelos analíticos complejos.",
         objetivos: [
-            'Desarrollar módulos interactivos de mapeo conformal aplicados a procesamiento de señales.',
-            'Facilitar la visualización de series de Laurent y residuos para el análisis de sistemas estables.',
-            'Integrar herramientas de simulación accesibles desde cualquier navegador para la comunidad estudiantil.'
+            "Desarrollar módulos interactivos de mapeo conformal aplicados a procesamiento de señales.",
+            "Facilitar la visualización de series de Laurent y residuos para el análisis de sistemas estables.",
+            "Integrar herramientas de simulación accesibles desde cualquier navegador para la comunidad estudiantil."
         ]
     };
 
-    try {
-        let html = await leerHtml('sobrenosotros.html');
-        const objetivos = datosSobreNosotros.objetivos.map(objetivo => `<li>${objetivo}</li>`).join('');
-        html = html.replace(/{{mision}}/g, datosSobreNosotros.mision);
-        html = html.replace(/{{vision}}/g, datosSobreNosotros.vision);
-        html = html.replace(/{{objetivos}}/g, objetivos);
+    const rutaHtml = path.join(__dirname, 'vistas', 'sobrenosotros.html');
 
-        res.json({ cssUrl: '/cssvistas/sobrenosotros.css', html });
-    } catch (error) {
-        enviarError(res, 500, 'No se pudo cargar sobrenosotros.html.');
-    }
+    fs.readFile(rutaHtml, 'utf8', (err, html) => {
+        if (err) {
+            console.log(err);
+            return res.status(500).json({ error: 'Error cargando sobrenosotros.html' });
+        }
+
+        const objetivos = datosSobreNosotros.objetivos.map(o => `<li>${o}</li>`).join('');
+        let htmlFinal = html;
+        htmlFinal = htmlFinal.replace(/{{mision}}/g, datosSobreNosotros.mision);
+        htmlFinal = htmlFinal.replace(/{{vision}}/g, datosSobreNosotros.vision);
+        htmlFinal = htmlFinal.replace(/{{objetivos}}/g, objetivos);
+
+        res.json({
+            cssUrl: '/cssvistas/sobrenosotros.css',
+            html: htmlFinal
+        });
+    });
 });
 
-app.get('/api/examen-algebra', (req, res) => responderVista(res, 'examen-algebra.html', '/cssvistas/examen-algebra.css'));
-app.get('/api/examen-derivacion', (req, res) => responderVista(res, 'examen-derivacion.html', '/cssvistas/examen-algebra.css'));
-app.get('/api/examen-integracion', (req, res) => responderVista(res, 'examen-integracion.html', '/cssvistas/examen-algebra.css'));
+/*========================================================
+EXAMENES
+==========================================================*/
+app.get('/api/examen-algebra', async (req, res) => {
+  try {
+    const rutaHtml = path.join(__dirname, 'vistas', 'examen-algebra.html');
+    const html = await fs.promises.readFile(rutaHtml, 'utf8');
 
-/* ==================================================
-   AUTENTICACIÓN CON POSTGRESQL (NEON)
-================================================== */
+    res.json({
+      cssUrl: '/cssvistas/examen-algebra.css',
+      html: html
+    });
+
+  } catch (err) {
+    console.error('Error cargando examen-algebra.html:', err);
+    res.status(500).json({ error: 'No se pudo cargar examen-algebra.html' });
+  }
+});
+
+app.get('/api/examen-derivacion', async (req, res) => {
+  try {
+    const rutaHtml = path.join(__dirname, 'vistas', 'examen-derivacion.html');
+    const html = await fs.promises.readFile(rutaHtml, 'utf8');
+
+    res.json({
+      cssUrl: '/cssvistas/examen-algebra.css',
+      html: html
+    });
+
+  } catch (err) {
+    console.error('Error cargando examen-derivacion.html:', err);
+    res.status(500).json({ error: 'No se pudo cargar examen-derivacion.html' });
+  }
+});
+
+app.get('/api/examen-integracion', async (req, res) => {
+  try {
+    const rutaHtml = path.join(__dirname, 'vistas', 'examen-integracion.html');
+    const html = await fs.promises.readFile(rutaHtml, 'utf8');
+
+    res.json({
+      cssUrl: '/cssvistas/examen-algebra.css',
+      html: html
+    });
+
+  } catch (err) {
+    console.error('Error cargando examen-integracion.html:', err);
+    res.status(500).json({ error: 'No se pudo cargar examen-integracion.html' });
+  }
+});
+
+/* =========================================================
+   AUTENTICACIÓN + POSTGRESQL + VERIFICACIÓN DE CORREO
+========================================================= */
+
+const pool = new Pool(
+    process.env.DATABASE_URL
+        ? {
+            // Neon (producción en Render)
+            connectionString: process.env.DATABASE_URL,
+            ssl: { rejectUnauthorized: false },
+            max: 10,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 15000
+        }
+        : {
+            // Desarrollo local con PostgreSQL propio
+            host: process.env.DB_HOST || 'localhost',
+            port: Number(process.env.DB_PORT || 5432),
+            database: process.env.DB_NAME || 'complexlab',
+            user: process.env.DB_USER || 'postgres',
+            password: process.env.DB_PASSWORD || '',
+            max: 10
+        }
+);
+
+pool.on('error', err => {
+    console.error('Error inesperado en el pool de PostgreSQL:', err.message);
+});
+
+const PORT = Number(process.env.PORT || 10000);
+const CODIGO_MINUTOS = 2;
 
 function crearHashPassword(password) {
     const salt = crypto.randomBytes(16);
-    const hash = crypto.scryptSync(password, salt, 32);
+    const hash = crypto.createHash('sha256')
+        .update(Buffer.concat([Buffer.from(password, 'utf8'), salt]))
+        .digest('hex');
 
     return {
         salt: salt.toString('hex'),
-        hash: hash.toString('hex')
+        hash
     };
 }
 
-function verificarPassword(password, saltHex, hashHex) {
-    try {
-        const salt = Buffer.from(saltHex.trim(), 'hex');
-        const hashCalculado = crypto.scryptSync(password, salt, 32);
-        const hashGuardado = Buffer.from(hashHex.trim(), 'hex');
+function verificarPassword(password, hashGuardado, saltGuardado) {
+    const salt = Buffer.from(saltGuardado, 'hex');
+    const hashCalculado = crypto.createHash('sha256')
+        .update(Buffer.concat([Buffer.from(password, 'utf8'), salt]))
+        .digest('hex');
 
-        return hashCalculado.length === hashGuardado.length &&
-            crypto.timingSafeEqual(hashCalculado, hashGuardado);
-    } catch (error) {
-        return false;
+    return crypto.timingSafeEqual(
+        Buffer.from(hashCalculado, 'hex'),
+        Buffer.from(hashGuardado, 'hex')
+    );
+}
+
+/*
+ * DES en modo CBC.
+ * La clave debe ser de 8 bytes. Se almacena en .env.
+ * Nota: DES es un requisito del proyecto, pero es un algoritmo antiguo;
+ * para un sistema real se recomienda AES-256-GCM.
+ */
+function getDesKey() {
+    const key = String(process.env.EMAIL_DES_KEY || '');
+    if (Buffer.byteLength(key, 'utf8') !== 8) {
+        throw new Error('EMAIL_DES_KEY debe tener exactamente 8 bytes/caracteres.');
+    }
+    return key;
+}
+
+function cifrarCorreo(correo) {
+    const key = CryptoJS.enc.Utf8.parse(getDesKey());
+    const iv = CryptoJS.enc.Hex.parse('0000000000000000');
+
+    const encrypted = CryptoJS.DES.encrypt(
+        correo,
+        key,
+        { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
+    );
+
+    return encrypted.ciphertext.toString(CryptoJS.enc.Base64);
+}
+
+function descifrarCorreo(cifrado) {
+    const key = CryptoJS.enc.Utf8.parse(getDesKey());
+    const iv = CryptoJS.enc.Hex.parse('0000000000000000');
+
+    const cipherParams = CryptoJS.lib.CipherParams.create({
+        ciphertext: CryptoJS.enc.Base64.parse(cifrado)
+    });
+
+    return CryptoJS.DES.decrypt(
+        cipherParams,
+        key,
+        { iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7 }
+    ).toString(CryptoJS.enc.Utf8);
+}
+
+/*
+ * Sesión: token firmado con HMAC-SHA256 (sin dependencias extra).
+ * Se guarda en sessionStorage del navegador y se envía en
+ * Authorization: Bearer <token>.
+ */
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+if (!process.env.SESSION_SECRET) {
+    console.warn('AVISO: define SESSION_SECRET; sin él las sesiones se pierden al reiniciar.');
+}
+const SESION_HORAS = 12;
+
+function crearToken(cuenta) {
+    const payload = Buffer.from(JSON.stringify({
+        id: String(cuenta.id_usuario),
+        u: cuenta.nombre_usuario,
+        exp: Date.now() + SESION_HORAS * 3600 * 1000
+    })).toString('base64url');
+
+    const firma = crypto.createHmac('sha256', SESSION_SECRET)
+        .update(payload).digest('base64url');
+
+    return `${payload}.${firma}`;
+}
+
+function leerToken(token) {
+    if (typeof token !== 'string' || !token.includes('.')) return null;
+
+    const [payload, firma] = token.split('.');
+    const esperada = crypto.createHmac('sha256', SESSION_SECRET)
+        .update(payload).digest('base64url');
+
+    const a = Buffer.from(firma);
+    const b = Buffer.from(esperada);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+
+    try {
+        const datos = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+        if (!datos.exp || datos.exp < Date.now()) return null;
+        return { id_usuario: datos.id, nombre_usuario: datos.u };
+    } catch {
+        return null;
     }
 }
 
+function requiereSesion(req, res, next) {
+    const cabecera = req.headers.authorization || '';
+    const token = cabecera.startsWith('Bearer ') ? cabecera.slice(7) : '';
+    const cuenta = leerToken(token);
+
+    if (!cuenta) {
+        return res.status(401).json({ error: 'Tu sesión no es válida o expiró. Inicia sesión de nuevo.' });
+    }
+
+    req.cuenta = cuenta;
+    next();
+}
+
+const MAX_INTENTOS_CODIGO = 5;
+const intentosCodigo = new Map();
+
 function validarUsuario(usuario) {
-    return typeof usuario === 'string' && /^[a-zA-Z0-9_.-]{3,30}$/.test(usuario);
+    return typeof usuario === 'string' &&
+        /^[a-zA-Z0-9_.-]{3,30}$/.test(usuario);
 }
 
 function validarCorreo(correo) {
-    return typeof correo === 'string' && /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@gmail\.com$/i.test(correo);
+    return typeof correo === 'string' &&
+        /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@gmail\.com$/i.test(correo);
 }
 
 function validarPassword(password) {
@@ -576,455 +642,609 @@ function validarPassword(password) {
         /[^A-Za-z0-9]/.test(password);
 }
 
-function generarCodigo6Digitos() {
+function generarCodigo() {
     return String(crypto.randomInt(100000, 1000000));
 }
 
-async function enviarCorreoVerificacion(correo, usuario, codigo) {
-    if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-        const transporter = nodemailer.createTransport({
-            host: process.env.SMTP_HOST,
-            port: Number(process.env.SMTP_PORT || 587),
-            secure: process.env.SMTP_SECURE === 'true',
-            auth: {
-                user: process.env.SMTP_USER,
-                pass: process.env.SMTP_PASS
-            }
+function transporterCorreo() {
+    return nodemailer.createTransport({
+        service: process.env.MAIL_SERVICE || 'gmail',
+        auth: {
+            user: process.env.MAIL_USER,
+            pass: process.env.MAIL_APP_PASSWORD
+        }
+    });
+}
+
+async function enviarCodigoVerificacion(correo, usuario, codigo) {
+    const asunto = 'Tu código de verificación de Complexlab:';
+
+    const texto = `Hola, ${usuario}:
+
+Gracias por registrarte en Complexlab. Para completar la verificación de tu correo electrónico y activar tu cuenta, ingresa el siguiente código de 6 dígitos en la plataforma:
+
+${codigo}
+
+Este código es válido por los próximos 2 minutos.
+
+¿No solicitaste este código?
+
+Si no intentaste crear una cuenta ni iniciar sesión en Complexlab, puedes ignorar este mensaje de forma segura. Tu cuenta seguirá protegida y no se realizará ningún cambio. Por tu seguridad, nunca compartas este código con nadie.
+
+Saludos,
+El equipo de Complexlab`;
+
+    await enviarCorreo({ to: correo, subject: asunto, text: texto });
+}
+
+/*
+ * Render (plan gratuito) bloquea los puertos SMTP 25/465/587, por lo que
+ * Gmail vía SMTP NO funciona allí. Si existe BREVO_API_KEY se usa la API
+ * HTTPS de Brevo (puerto 443). Si no, se usa SMTP (útil en local o en
+ * un plan de pago de Render).
+ */
+async function enviarCorreo({ to, subject, text }) {
+    const remitente = process.env.MAIL_FROM || process.env.MAIL_USER;
+
+    if (process.env.BREVO_API_KEY) {
+        const respuesta = await fetch('https://api.brevo.com/v3/smtp/email', {
+            method: 'POST',
+            headers: {
+                'accept': 'application/json',
+                'content-type': 'application/json',
+                'api-key': process.env.BREVO_API_KEY
+            },
+            body: JSON.stringify({
+                sender: { name: 'Complexlab', email: remitente },
+                to: [{ email: to }],
+                subject,
+                textContent: text
+            })
         });
 
-        await transporter.sendMail({
-            from: process.env.SMTP_FROM || `"COMPLEXLAB" <${process.env.SMTP_USER}>`,
-            to: correo,
-            subject: 'Código de verificación - COMPLEXLAB',
-            text: `Hola ${usuario}, tu código de verificación es: ${codigo}. Válido por 2 minutos.`,
-            html: `<p>Hola <strong>${usuario}</strong>,</p><p>Tu código de verificación de COMPLEXLAB es:</p><h2>${codigo}</h2><p>Este código es válido por 2 minutos.</p>`
-        });
-        return true;
-    } else {
-        console.log(`[VERIFICACIÓN DEMO] Usuario: ${usuario} | Correo: ${correo} | Código: ${codigo}`);
-        return false;
+        if (!respuesta.ok) {
+            const detalle = await respuesta.text();
+            throw new Error(`Brevo respondió ${respuesta.status}: ${detalle}`);
+        }
+        return;
     }
+
+    await transporterCorreo().sendMail({
+        from: `"Complexlab" <${remitente}>`,
+        to,
+        subject,
+        text
+    });
 }
+
+async function buscarUsuarioPorNombre(usuario) {
+    const resultado = await pool.query(
+        `SELECT id_usuario, nombre_usuario, correo, password_hash, password_salt, correo_verificado
+         FROM usuario
+         WHERE LOWER(nombre_usuario) = LOWER($1)
+         LIMIT 1`,
+        [usuario]
+    );
+    return resultado.rows[0] || null;
+}
+
+async function correoYaRegistrado(correo) {
+    const resultado = await pool.query(
+        `SELECT correo FROM usuario WHERE correo IS NOT NULL`
+    );
+
+    for (const fila of resultado.rows) {
+        if (descifrarCorreo(fila.correo).toLowerCase() === correo.toLowerCase()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 app.get('/api/vistas/inicio-sesion', (req, res) => {
+    const ruta = path.join(__dirname, 'vistas', 'inicio-sesion.html');
     res.set('Cache-Control', 'no-store');
-    responderVista(res, 'inicio-sesion.html', '/cssvistas/auth.css');
+
+    fs.readFile(ruta, 'utf8', (err, html) => {
+        if (err) {
+            console.error('Error cargando inicio-sesion.html:', err);
+            return res.status(500).json({ error: 'No se pudo cargar la vista de inicio de sesión.' });
+        }
+
+        res.json({
+            cssUrl: '/cssvistas/auth.css',
+            html
+        });
+    });
 });
 
 app.get('/api/vistas/registro', (req, res) => {
+    const ruta = path.join(__dirname, 'vistas', 'registro.html');
     res.set('Cache-Control', 'no-store');
-    responderVista(res, 'registro.html', '/cssvistas/auth.css');
+
+    fs.readFile(ruta, 'utf8', (err, html) => {
+        if (err) {
+            console.error('Error cargando registro.html:', err);
+            return res.status(500).json({ error: 'No se pudo cargar la vista de registro.' });
+        }
+
+        res.json({
+            cssUrl: '/cssvistas/auth.css',
+            html
+        });
+    });
 });
 
+/* 1) Genera y envía el código. Todavía NO crea el usuario definitivo. */
 app.post('/api/registro/enviar-codigo', async (req, res) => {
-    const { usuario, correo, password } = req.body || {};
-
-    if (!usuario || !correo || !password) {
-        return enviarError(res, 400, 'Todos los campos son obligatorios.');
-    }
-
-    const nombreUsuario = usuario.trim();
-    const email = correo.trim();
-
-    if (!validarUsuario(nombreUsuario)) {
-        return enviarError(res, 400, 'El usuario debe tener entre 3 y 30 caracteres (letras, números, punto, guion y guion bajo).');
-    }
-
-    if (!validarCorreo(email)) {
-        return enviarError(res, 400, 'Ingresa un correo válido que termine en @gmail.com.');
-    }
-
-    if (!validarPassword(password)) {
-        return enviarError(res, 400, 'La contraseña debe tener al menos 10 caracteres, una mayúscula, una minúscula, un número y un carácter especial.');
-    }
-
-    const client = await pool.connect();
     try {
-        const existeUsuario = await client.query(
-            'SELECT 1 FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1) OR LOWER(correo) = LOWER($2)',
-            [nombreUsuario, email]
+        const { usuario, correo, password } = req.body || {};
+
+        if (
+            typeof usuario !== 'string' ||
+            typeof correo !== 'string' ||
+            typeof password !== 'string' ||
+            !usuario.trim() || !correo.trim() || !password
+        ) {
+            return res.status(400).json({ error: 'Todos los campos son obligatorios.' });
+        }
+
+        const nombreUsuario = usuario.trim();
+        const email = correo.trim().toLowerCase();
+
+        if (!validarUsuario(nombreUsuario)) {
+            return res.status(400).json({
+                error: 'El usuario debe tener entre 3 y 30 caracteres. Solo se permiten letras, números, punto, guion y guion bajo.'
+            });
+        }
+
+        if (!validarCorreo(email)) {
+            return res.status(400).json({
+                error: 'Ingresa un correo válido que termine en @gmail.com.'
+            });
+        }
+
+        if (!validarPassword(password)) {
+            return res.status(400).json({
+                error: 'La contraseña debe tener al menos 10 caracteres, una mayúscula, una minúscula, un número y un carácter especial.'
+            });
+        }
+
+        const usuarioExistente = await buscarUsuarioPorNombre(nombreUsuario);
+        if (usuarioExistente) {
+            return res.status(409).json({ error: 'Ese nombre de usuario ya está registrado.' });
+        }
+
+        if (await correoYaRegistrado(email)) {
+            return res.status(409).json({ error: 'Ese correo ya está registrado.' });
+        }
+
+        const hash = crearHashPassword(password);
+        const codigo = generarCodigo();
+        const expiracion = new Date(Date.now() + CODIGO_MINUTOS * 60 * 1000);
+
+        await pool.query('DELETE FROM registro_pendiente WHERE LOWER(nombre_usuario) = LOWER($1) OR LOWER(correo) = LOWER($2)', [nombreUsuario, email]);
+        await pool.query(
+            `INSERT INTO registro_pendiente
+             (nombre_usuario, correo, password_hash, password_salt, fecha_creacion)
+             VALUES ($1, $2, $3, $4, NOW())`,
+            [nombreUsuario, email, hash.hash, hash.salt]
         );
 
-        if (existeUsuario.rows.length > 0) {
-            return enviarError(res, 409, 'El nombre de usuario o el correo ya están registrados.');
+        const pendiente = await pool.query(
+            `SELECT id_pendiente FROM registro_pendiente
+             WHERE LOWER(nombre_usuario) = LOWER($1)
+             ORDER BY id_pendiente DESC LIMIT 1`,
+            [nombreUsuario]
+        );
+
+        await pool.query(
+            `INSERT INTO codigo_de_verificacion
+             (codigo_temporal, fecha_expiracion, usado, id_pendiente)
+             VALUES ($1, $2, FALSE, $3)`,
+            [codigo, expiracion, pendiente.rows[0].id_pendiente]
+        );
+
+        await enviarCodigoVerificacion(email, nombreUsuario, codigo);
+        intentosCodigo.delete(nombreUsuario.toLowerCase());
+
+        return res.status(200).json({
+            mensaje: 'Código enviado. Revisa tu correo. Es válido durante 2 minutos.',
+            expiraEn: expiracion.toISOString()
+        });
+    } catch (error) {
+        console.error('Error enviando código de verificación:', error);
+        return res.status(500).json({
+            error: 'No se pudo enviar el código de verificación. Verifica la configuración del correo.'
+        });
+    }
+});
+
+/* 2) Comprueba el código y crea definitivamente el usuario. */
+app.post('/api/registro/verificar', async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+        const { usuario, codigo } = req.body || {};
+
+        if (typeof usuario !== 'string' || typeof codigo !== 'string' ||
+            !usuario.trim() || !/^\d{6}$/.test(codigo)) {
+            return res.status(400).json({ error: 'Ingresa el código de 6 dígitos recibido por correo.' });
+        }
+
+        const claveIntentos = usuario.trim().toLowerCase();
+        if ((intentosCodigo.get(claveIntentos) || 0) >= MAX_INTENTOS_CODIGO) {
+            return res.status(429).json({ error: 'Demasiados intentos fallidos. Solicita un código nuevo.' });
         }
 
         await client.query('BEGIN');
 
-        await client.query(
-            'DELETE FROM registro_pendiente WHERE LOWER(nombre_usuario) = LOWER($1) OR LOWER(correo) = LOWER($2)',
-            [nombreUsuario, email]
-        );
-
-        const { salt, hash } = crearHashPassword(password);
-
-        const resPendiente = await client.query(
-            `INSERT INTO registro_pendiente (nombre_usuario, correo, password_hash, password_salt)
-             VALUES ($1, $2, $3, $4) RETURNING id_pendiente`,
-            [nombreUsuario, email, hash, salt]
-        );
-
-        const idPendiente = resPendiente.rows.id_pendiente;
-        const codigo = generarCodigo6Digitos();
-        const expiraEn = new Date(Date.now() + 2 * 60 * 1000);
-
-        await client.query(
-            `INSERT INTO codigo_de_verificacion (codigo_temporal, fecha_expiracion, usado, id_pendiente)
-             VALUES ($1, $2, FALSE, $3)`,
-            [codigo, expiraEn.toISOString(), idPendiente]
-        );
-
-        await client.query('COMMIT');
-
-        const enviadoPorCorreo = await enviarCorreoVerificacion(email, nombreUsuario, codigo);
-
-        return res.status(200).json({
-            mensaje: enviadoPorCorreo
-                ? 'Código enviado a tu correo @gmail.com.'
-                : `Código generado (Modo sin SMTP: ${codigo}). Revisa tu bandeja.`,
-            expiraEn: expiraEn.toISOString()
-        });
-    } catch (error) {
-        await client.query('ROLLBACK');
-        console.error('Error en /api/registro/enviar-codigo:', error);
-        return enviarError(res, 500, 'Error al procesar el registro.');
-    } finally {
-        client.release();
-    }
-});
-
-app.post('/api/registro/verificar', async (req, res) => {
-    const { usuario, codigo } = req.body || {};
-
-    if (!usuario || !codigo) {
-        return enviarError(res, 400, 'Faltan datos para la verificación.');
-    }
-
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-
-        const resPendiente = await client.query(
-            `SELECT rp.*, cv.id_codigo, cv.codigo_temporal, cv.fecha_expiracion, cv.usado
-             FROM registro_pendiente rp
-             JOIN codigo_de_verificacion cv ON cv.id_pendiente = rp.id_pendiente
-             WHERE LOWER(rp.nombre_usuario) = LOWER($1)
-             ORDER BY cv.id_codigo DESC
+        const consulta = await client.query(
+            `SELECT c.id_codigo, c.codigo_temporal, c.fecha_expiracion, c.usado,
+                    p.id_pendiente, p.nombre_usuario, p.correo,
+                    p.password_hash, p.password_salt
+             FROM codigo_de_verificacion c
+             JOIN registro_pendiente p ON p.id_pendiente = c.id_pendiente
+             WHERE LOWER(p.nombre_usuario) = LOWER($1)
+             ORDER BY c.id_codigo DESC
              LIMIT 1`,
             [usuario.trim()]
         );
 
-        if (resPendiente.rows.length === 0) {
+        if (consulta.rows.length === 0) {
             await client.query('ROLLBACK');
-            return enviarError(res, 404, 'No se encontró una solicitud de registro activa.');
+            return res.status(404).json({ error: 'No existe una verificación pendiente para este usuario.' });
         }
 
-        const registro = resPendiente.rows;
+        const registro = consulta.rows[0];
 
         if (registro.usado) {
             await client.query('ROLLBACK');
-            return enviarError(res, 400, 'Este código ya fue utilizado.');
+            return res.status(400).json({ error: 'Ese código ya fue utilizado. Solicita uno nuevo.' });
         }
 
-        if (new Date(registro.fecha_expiracion) < new Date()) {
+        if (new Date(registro.fecha_expiracion).getTime() <= Date.now()) {
             await client.query('ROLLBACK');
-            return enviarError(res, 400, 'El código ha caducado. Solicita uno nuevo.');
+            return res.status(400).json({ error: 'El código ha caducado. Solicita un nuevo código.' });
         }
 
-        if (registro.codigo_temporal.trim() !== String(codigo).trim()) {
+        if (registro.codigo_temporal !== codigo) {
             await client.query('ROLLBACK');
-            return enviarError(res, 400, 'El código de verificación es incorrecto.');
+            intentosCodigo.set(claveIntentos, (intentosCodigo.get(claveIntentos) || 0) + 1);
+            return res.status(400).json({ error: 'El código de verificación no coincide.' });
         }
+
+        const existente = await client.query(
+            `SELECT id_usuario FROM usuario
+             WHERE LOWER(nombre_usuario) = LOWER($1)`,
+            [registro.nombre_usuario]
+        );
+
+        if (existente.rows.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: 'Ese nombre de usuario ya está registrado.' });
+        }
+
+        const correoCifrado = cifrarCorreo(registro.correo);
+
+        const usuarioNuevo = await client.query(
+            `INSERT INTO usuario
+             (nombre_usuario, correo, password_hash, password_salt, correo_verificado)
+             VALUES ($1, $2, $3, $4, TRUE)
+             RETURNING id_usuario, nombre_usuario`,
+            [
+                registro.nombre_usuario,
+                correoCifrado,
+                registro.password_hash,
+                registro.password_salt
+            ]
+        );
 
         await client.query(
-            'UPDATE codigo_de_verificacion SET usado = TRUE WHERE id_codigo = $1',
+            `UPDATE codigo_de_verificacion
+             SET usado = TRUE
+             WHERE id_codigo = $1`,
             [registro.id_codigo]
         );
 
-        const nuevoUsuario = await client.query(
-            `INSERT INTO usuario (nombre_usuario, correo, password_hash, password_salt, correo_verificado)
-             VALUES ($1, $2, $3, $4, TRUE)
-             RETURNING nombre_usuario`,
-            [registro.nombre_usuario, registro.correo, registro.password_hash, registro.password_salt]
-        );
-
         await client.query(
-            'DELETE FROM registro_pendiente WHERE id_pendiente = $1',
+            `DELETE FROM registro_pendiente WHERE id_pendiente = $1`,
             [registro.id_pendiente]
         );
 
         await client.query('COMMIT');
+        intentosCodigo.delete(claveIntentos);
 
         return res.status(201).json({
-            mensaje: 'Cuenta verificada y creada con éxito.',
-            usuario: nuevoUsuario.rows.nombre_usuario
+            mensaje: 'Cuenta registrada y correo verificado correctamente.',
+            usuario: usuarioNuevo.rows[0].nombre_usuario,
+            token: crearToken(usuarioNuevo.rows[0])
         });
     } catch (error) {
-        await client.query('ROLLBACK');
-        console.error('Error en /api/registro/verificar:', error);
-        return enviarError(res, 500, 'Error al verificar el código.');
+        await client.query('ROLLBACK').catch(() => {});
+        console.error('Error verificando registro:', error);
+        return res.status(500).json({ error: 'No se pudo completar la verificación.' });
     } finally {
         client.release();
     }
 });
 
+/* 3) Reenvía un código nuevo y reinicia la caducidad de 2 minutos. */
 app.post('/api/registro/reenviar-codigo', async (req, res) => {
-    const { usuario } = req.body || {};
-    if (!usuario) return enviarError(res, 400, 'Usuario requerido.');
-
-    const client = await pool.connect();
     try {
-        const resPendiente = await client.query(
-            'SELECT id_pendiente, nombre_usuario, correo FROM registro_pendiente WHERE LOWER(nombre_usuario) = LOWER($1)',
+        const { usuario } = req.body || {};
+
+        if (typeof usuario !== 'string' || !usuario.trim()) {
+            return res.status(400).json({ error: 'No se indicó el usuario.' });
+        }
+
+        const pendiente = await pool.query(
+            `SELECT id_pendiente, nombre_usuario, correo
+             FROM registro_pendiente
+             WHERE LOWER(nombre_usuario) = LOWER($1)
+             LIMIT 1`,
             [usuario.trim()]
         );
 
-        if (resPendiente.rows.length === 0) {
-            return enviarError(res, 404, 'La solicitud expiró. Por favor vuelve a llenar el formulario.');
+        if (pendiente.rows.length === 0) {
+            return res.status(404).json({ error: 'No existe un registro pendiente para ese usuario.' });
         }
 
-        const pendiente = resPendiente.rows;
-        const nuevoCodigo = generarCodigo6Digitos();
-        const expiraEn = new Date(Date.now() + 2 * 60 * 1000);
+        const ultimo = await pool.query(
+            `SELECT fecha_expiracion FROM codigo_de_verificacion
+             WHERE id_pendiente = $1 ORDER BY id_codigo DESC LIMIT 1`,
+            [pendiente.rows[0].id_pendiente]
+        );
+        if (ultimo.rows.length > 0) {
+            const segundosRestantes = (new Date(ultimo.rows[0].fecha_expiracion).getTime() - Date.now()) / 1000;
+            if (segundosRestantes > CODIGO_MINUTOS * 60 - 30) {
+                return res.status(429).json({ error: 'Espera unos segundos antes de solicitar otro código.' });
+            }
+        }
 
-        await client.query(
-            `INSERT INTO codigo_de_verificacion (codigo_temporal, fecha_expiracion, usado, id_pendiente)
-             VALUES ($1, $2, FALSE, $3)`,
-            [nuevoCodigo, expiraEn.toISOString(), pendiente.id_pendiente]
+        const nuevoCodigo = generarCodigo();
+        const nuevaExpiracion = new Date(Date.now() + CODIGO_MINUTOS * 60 * 1000);
+
+        await pool.query(
+            `UPDATE codigo_de_verificacion
+             SET usado = TRUE
+             WHERE id_pendiente = $1 AND usado = FALSE`,
+            [pendiente.rows[0].id_pendiente]
         );
 
-        const enviadoPorCorreo = await enviarCorreoVerificacion(pendiente.correo, pendiente.nombre_usuario, nuevoCodigo);
+        await pool.query(
+            `INSERT INTO codigo_de_verificacion
+             (codigo_temporal, fecha_expiracion, usado, id_pendiente)
+             VALUES ($1, $2, FALSE, $3)`,
+            [nuevoCodigo, nuevaExpiracion, pendiente.rows[0].id_pendiente]
+        );
+
+        intentosCodigo.delete(pendiente.rows[0].nombre_usuario.toLowerCase());
+        await enviarCodigoVerificacion(
+            pendiente.rows[0].correo,
+            pendiente.rows[0].nombre_usuario,
+            nuevoCodigo
+        );
 
         return res.status(200).json({
-            mensaje: enviadoPorCorreo
-                ? 'Nuevo código enviado a tu correo.'
-                : `Nuevo código generado (Modo sin SMTP: ${nuevoCodigo}).`,
-            expiraEn: expiraEn.toISOString()
+            mensaje: 'Se envió un nuevo código a tu correo.',
+            expiraEn: nuevaExpiracion.toISOString()
         });
     } catch (error) {
-        console.error('Error en /api/registro/reenviar-codigo:', error);
-        return enviarError(res, 500, 'No se pudo reenviar el código.');
-    } finally {
-        client.release();
+        console.error('Error reenviando código:', error);
+        return res.status(500).json({ error: 'No se pudo reenviar el código.' });
     }
+});
+
+app.post('/api/registro', async (req, res) => {
+    return res.status(400).json({
+        error: 'El registro requiere primero la verificación del código enviado al correo.'
+    });
 });
 
 app.post('/api/iniciar-sesion', async (req, res) => {
-    const { usuario, password } = req.body || {};
-
-    if (!usuario || !password) {
-        return enviarError(res, 400, 'Ingresa el usuario y la contraseña.');
-    }
-
     try {
-        const resultado = await pool.query(
-            'SELECT id_usuario, nombre_usuario, password_hash, password_salt FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1)',
-            [usuario.trim()]
-        );
+        const { usuario, password } = req.body || {};
 
-        if (resultado.rows.length === 0) {
-            return enviarError(res, 401, 'Usuario o contraseña incorrectos.');
+        if (
+            typeof usuario !== 'string' ||
+            typeof password !== 'string' ||
+            !usuario.trim() ||
+            !password
+        ) {
+            return res.status(400).json({ error: 'Ingresa el usuario y la contraseña.' });
         }
 
-        const cuenta = resultado.rows;
+        const cuenta = await buscarUsuarioPorNombre(usuario.trim());
 
-        if (!verificarPassword(password, cuenta.password_salt, cuenta.password_hash)) {
-            return enviarError(res, 401, 'Usuario o contraseña incorrectos.');
+        if (!cuenta || !cuenta.correo_verificado ||
+            !verificarPassword(password, cuenta.password_hash, cuenta.password_salt)) {
+            return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
         }
 
         return res.status(200).json({
             mensaje: 'Inicio de sesión correcto.',
-            usuario: cuenta.nombre_usuario
+            usuario: cuenta.nombre_usuario,
+            token: crearToken(cuenta)
         });
     } catch (error) {
-        console.error('Error en /api/iniciar-sesion:', error);
-        return enviarError(res, 500, 'Error interno al iniciar sesión.');
+        console.error('Error iniciando sesión:', error);
+        return res.status(500).json({ error: 'No se pudo iniciar sesión.' });
     }
 });
 
-app.get('/api/scripts/auth', async (req, res) => {
+/* =========================================================
+   PROGRESO ACADÉMICO
+========================================================= */
+
+app.post('/api/progreso', requiereSesion, async (req, res) => {
     try {
-        const rutaScript = path.join(DIR.js, 'auth.js');
-        const codigo = await fs.promises.readFile(rutaScript, 'utf8');
-        res.type('application/javascript');
-        res.set('Cache-Control', 'no-store');
-        res.status(200).send(codigo);
-    } catch (error) {
-        enviarError(res, 500, 'No se pudo cargar el script de autenticación.');
-    }
-});
+        const { unidad_tematica, calificacion } = req.body || {};
+        const nota = Number(calificacion);
 
-/* ==================================================
-   MI PROGRESO Y EVALUACIONES (POSTGRESQL)
-================================================== */
-
-app.get('/api/mi-progreso', (req, res) => {
-    responderVista(res, 'mi-progreso.html', '/cssvistas/mi-progreso.css');
-});
-
-app.get('/api/progreso/:usuario', async (req, res) => {
-    try {
-        const { rows } = await pool.query(
-            `SELECT p.id_progreso, p.numero_de_intento, p.fecha_de_guardado, p.unidad_tematica, p.calificacion
-             FROM progreso p
-             JOIN usuario u ON u.id_usuario = p.id_usuario
-             WHERE LOWER(u.nombre_usuario) = LOWER($1)
-             ORDER BY p.fecha_de_guardado DESC`,
-            [req.params.usuario.trim()]
-        );
-        res.json(rows);
-    } catch (error) {
-        console.error('Error al obtener progreso:', error);
-        enviarError(res, 500, 'Error al consultar el progreso.');
-    }
-});
-
-app.post('/api/progreso', async (req, res) => {
-    const { usuario, numero_intento, unidad_tematica, calificacion } = req.body || {};
-
-    if (!usuario || !unidad_tematica || calificacion === undefined) {
-        return enviarError(res, 400, 'Datos incompletos para guardar progreso.');
-    }
-
-    try {
-        const userRes = await pool.query(
-            'SELECT id_usuario FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1)',
-            [usuario.trim()]
-        );
-
-        if (userRes.rows.length === 0) {
-            return enviarError(res, 404, 'Usuario no encontrado.');
+        if (typeof unidad_tematica !== 'string' || !unidad_tematica.trim() ||
+            unidad_tematica.length > 150 || !Number.isFinite(nota) || nota < 0 || nota > 10) {
+            return res.status(400).json({ error: 'Datos de progreso no válidos.' });
         }
 
-        const idUsuario = userRes.rows[0].id_usuario;
-
-        const insertRes = await pool.query(
-            `INSERT INTO progreso (id_usuario, numero_de_intento, unidad_tematica, calificacion)
-             VALUES ($1, $2, $3, $4)
-             RETURNING *`,
-            [idUsuario, numero_intento || 1, unidad_tematica, Number(calificacion)]
+        // El número de intento lo calcula el servidor (siguiente del usuario).
+        const resultado = await pool.query(
+            `INSERT INTO progreso
+             (id_usuario, numero_de_intento, unidad_tematica, calificacion)
+             SELECT $1::bigint, COALESCE(MAX(numero_de_intento), 0) + 1, $2, $3
+             FROM progreso WHERE id_usuario = $1::bigint
+             RETURNING id_progreso, numero_de_intento, fecha_de_guardado,
+                       unidad_tematica, calificacion`,
+            [req.cuenta.id_usuario, unidad_tematica.trim(), nota]
         );
 
-        res.status(201).json({
-            mensaje: 'Progreso guardado correctamente.',
-            registro: insertRes.rows[0]
-        });
+        return res.status(201).json({ progreso: resultado.rows[0] });
     } catch (error) {
-        console.error('Error al guardar progreso:', error);
-        enviarError(res, 500, 'Error al guardar la calificación en la base de datos.');
+        console.error('Error guardando progreso:', error);
+        return res.status(500).json({ error: 'No se pudo guardar el progreso.' });
     }
 });
 
-app.delete('/api/progreso/:usuario', async (req, res) => {
+app.get('/api/progreso', requiereSesion, async (req, res) => {
+    try {
+        const resultado = await pool.query(
+            `SELECT id_progreso, numero_de_intento, fecha_de_guardado,
+                    unidad_tematica, calificacion
+             FROM progreso
+             WHERE id_usuario = $1
+             ORDER BY fecha_de_guardado DESC, id_progreso DESC`,
+            [req.cuenta.id_usuario]
+        );
+
+        return res.json(resultado.rows.map(f => ({
+            ...f,
+            calificacion: Number(f.calificacion)
+        })));
+    } catch (error) {
+        console.error('Error consultando progreso:', error);
+        return res.status(500).json({ error: 'No se pudo consultar el progreso.' });
+    }
+});
+
+app.delete('/api/progreso', requiereSesion, async (req, res) => {
+    try {
+        await pool.query('DELETE FROM progreso WHERE id_usuario = $1', [req.cuenta.id_usuario]);
+        return res.json({ mensaje: 'Historial eliminado correctamente.' });
+    } catch (error) {
+        console.error('Error eliminando progreso:', error);
+        return res.status(500).json({ error: 'No se pudo eliminar el historial.' });
+    }
+});
+
+/* =========================================================
+   DESARROLLO DE SIMULACIONES
+========================================================= */
+
+app.post('/api/desarrollo-simulacion', requiereSesion, async (req, res) => {
+    try {
+        const { desarrollo_id, simulacion_id, ruta_pdf } = req.body || {};
+
+        if (typeof desarrollo_id !== 'string' || typeof simulacion_id !== 'string' ||
+            !desarrollo_id || !simulacion_id ||
+            desarrollo_id.length > 100 || simulacion_id.length > 150) {
+            return res.status(400).json({ error: 'Datos del desarrollo no válidos.' });
+        }
+
+        const resultado = await pool.query(
+            `INSERT INTO desarrollo_simulacion
+             (id_usuario, desarrollo_id, simulacion_id, ruta_pdf)
+             VALUES ($1, $2, $3, $4)
+             RETURNING *`,
+            [req.cuenta.id_usuario, desarrollo_id, simulacion_id,
+             typeof ruta_pdf === 'string' ? ruta_pdf : null]
+        );
+
+        return res.status(201).json({ desarrollo: resultado.rows[0] });
+    } catch (error) {
+        console.error('Error guardando desarrollo de simulación:', error);
+        return res.status(500).json({ error: 'No se pudo guardar el desarrollo.' });
+    }
+});
+
+app.get('/api/scripts/auth', (req, res) => {
+    const rutaScript = path.join(__dirname, 'js', 'auth.js');
+
+    fs.readFile(rutaScript, 'utf8', (err, codigo) => {
+        if (err) {
+            console.error('Error al cargar js/auth.js:', err);
+            return res.status(500).json({ error: 'No se pudo cargar el script de autenticación.' });
+        }
+
+        res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).send(codigo);
+    });
+});
+
+/*==================================================
+VISTA: MI PROGRESO
+==================================================*/
+app.get('/api/mi-progreso', (req, res) => {
+    const rutaHtml = path.join(__dirname, 'vistas', 'mi-progreso.html');
+
+    fs.readFile(rutaHtml, 'utf8', (err, html) => {
+        if (err) {
+            console.error('Error cargando mi-progreso.html:', err);
+            return res.status(500).json({ error: 'No se pudo cargar la vista Mi progreso.' });
+        }
+
+        res.json({
+            cssUrl: '/cssvistas/mi-progreso.css',
+            html: html
+        });
+    });
+});
+
+/*==================================================
+SALUD + FRONTEND (React build o carpeta public)
+==================================================*/
+app.get('/health', (req, res) => res.json({ ok: true }));
+
+const rutaBuild = path.join(__dirname, 'build');
+const rutaPublic = path.join(__dirname, 'public');
+const rutaFront = fs.existsSync(path.join(rutaBuild, 'index.html')) ? rutaBuild : rutaPublic;
+
+app.use(express.static(rutaFront));
+
+app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
+
+    const indice = path.join(rutaFront, 'index.html');
+    if (fs.existsSync(indice)) return res.sendFile(indice);
+    next();
+});
+
+/*==================================================
+ARRANQUE DEL SERVIDOR
+==================================================*/
+async function iniciarBaseDeDatos() {
+    const sql = fs.readFileSync(path.join(__dirname, 'db', 'schema.sql'), 'utf8');
+    await pool.query(sql);
+    console.log('Base de datos lista (tablas verificadas).');
+}
+
+async function limpiarRegistrosPendientes() {
     try {
         await pool.query(
-            `DELETE FROM progreso
-             WHERE id_usuario = (SELECT id_usuario FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1))`,
-            [req.params.usuario.trim()]
+            `DELETE FROM registro_pendiente
+             WHERE fecha_creacion < NOW() - INTERVAL '1 hour'`
         );
-        res.json({ mensaje: 'Historial eliminado correctamente.' });
     } catch (error) {
-        console.error('Error al borrar progreso:', error);
-        enviarError(res, 500, 'No se pudo eliminar el historial.');
+        console.error('Error limpiando registros pendientes:', error.message);
     }
-});
+}
 
-/* ==================================================
-   DESARROLLOS DE SIMULACIÓN (PDFs)
-================================================== */
-
-app.get('/api/desarrollos/:usuario', async (req, res) => {
-    try {
-        const { rows } = await pool.query(
-            `SELECT d.id_registro, d.fecha_de_guardado, d.desarrollo_id, d.simulacion_id, d.ruta_pdf
-             FROM desarrollo_simulacion d
-             JOIN usuario u ON u.id_usuario = d.id_usuario
-             WHERE LOWER(u.nombre_usuario) = LOWER($1)
-             ORDER BY d.fecha_de_guardado DESC`,
-            [req.params.usuario.trim()]
-        );
-        res.json(rows);
-    } catch (error) {
-        console.error('Error al obtener desarrollos:', error);
-        enviarError(res, 500, 'Error al consultar los PDFs guardados.');
-    }
-});
-
-app.post('/api/desarrollos', async (req, res) => {
-    const { usuario, desarrollo_id, simulacion_id, ruta_pdf } = req.body || {};
-
-    if (!usuario || !desarrollo_id || !simulacion_id) {
-        return enviarError(res, 400, 'Faltan datos del desarrollo.');
-    }
-
-    try {
-        const userRes = await pool.query(
-            'SELECT id_usuario FROM usuario WHERE LOWER(nombre_usuario) = LOWER($1)',
-            [usuario.trim()]
-        );
-
-        if (userRes.rows.length === 0) {
-            return enviarError(res, 404, 'Usuario no encontrado.');
-        }
-
-        const insertRes = await pool.query(
-            `INSERT INTO desarrollo_simulacion (id_usuario, desarrollo_id, simulacion_id, ruta_pdf)
-             VALUES ($1, $2, $3, $4)
-             RETURNING *`,
-            [userRes.rows[0].id_usuario, desarrollo_id, simulacion_id, ruta_pdf || null]
-        );
-
-        res.status(201).json({
-            mensaje: 'Desarrollo guardado correctamente.',
-            registro: insertRes.rows[0]
+iniciarBaseDeDatos()
+    .catch(error => console.error('No se pudo preparar la base de datos:', error.message))
+    .finally(() => {
+        app.listen(PORT, '0.0.0.0', () => {
+            console.log(`Servidor COMPLEXLAB activo en el puerto ${PORT}`);
         });
-    } catch (error) {
-        console.error('Error al guardar desarrollo:', error);
-        enviarError(res, 500, 'Error al guardar el desarrollo.');
-    }
-});
-
-/* ==================================================
-   MANEJO DE ERRORES Y FRONTEND REACT
-================================================== */
-
-app.use((err, req, res, next) => {
-    if (res.headersSent) return next(err);
-
-    if (err.status === 404 || err.statusCode === 404) {
-        return res.status(404).json({
-            error: 'No se encontró el archivo solicitado.',
-            ruta: req.originalUrl
-        });
-    }
-
-    console.error('Error de Express:', err);
-    return res.status(500).json({ error: 'Ocurrió un error interno al procesar la solicitud.' });
-});
-
-app.use('/api', (req, res) => {
-    res.status(404).json({
-        error: 'Ruta API no encontrada.',
-        ruta: req.originalUrl
+        limpiarRegistrosPendientes();
+        setInterval(limpiarRegistrosPendientes, 15 * 60 * 1000).unref();
     });
-});
-
-app.get('/{*splat}', (req, res, next) => {
-    const indexPath = path.join(BUILD_DIR, 'index.html');
-    if (fs.existsSync(indexPath)) {
-        return res.sendFile(indexPath, error => {
-            if (error) next(error);
-        });
-    }
-    return res.status(200).send('Servidor API REST de COMPLEXLAB activo en Render.');
-});
-
-/* ==================================================
-   ARRANQUE DEL SERVIDOR
-================================================== */
-
-inicializarBaseDeDatos().then(() => {
-    app.listen(PORT, '0.0.0.0', () => {
-        console.log(`Servidor COMPLEXLAB activo en el puerto ${PORT}`);
-        console.log(`Entorno: ${process.env.NODE_ENV || 'development'}`);
-    });
-});
