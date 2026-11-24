@@ -157,6 +157,14 @@ app.use('/imagenes', express.static(DIR.imagenes, { fallthrough: false, maxAge: 
 app.use('/fondos', express.static(DIR.fondos, { fallthrough: false, maxAge: '1d' }));
 app.use('/cssvistas', express.static(DIR.css, { fallthrough: false, maxAge: '1d' }));
 app.use('/vistas', express.static(DIR.vistas, { fallthrough: false, maxAge: '1d' }));
+// Archivos locales de KaTeX (ubicados en la raíz del proyecto junto a vistas/)
+app.use('/fonts', express.static(path.join(ROOT, 'fonts'), { fallthrough: false, maxAge: '7d' }));
+app.get('/katex.min.css', (req, res) => {
+    res.sendFile(path.join(ROOT, 'katex.min.css'));
+});
+app.get('/katex.min.js', (req, res) => {
+    res.sendFile(path.join(ROOT, 'katex.min.js'));
+});
 app.use('/js', express.static(DIR.js, { fallthrough: false, maxAge: '1d' }));
 
 const juegos = [
